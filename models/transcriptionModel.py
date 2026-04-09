@@ -5,10 +5,7 @@ import whisper
 import threading
 from datetime import datetime
 from pydub import AudioSegment
-from pydub.utils import which
 from config import Config
-
-AudioSegment.converter = which("ffmpeg")
 
 class TranscriptionJob:
     """Model for transcription job data and operations"""
