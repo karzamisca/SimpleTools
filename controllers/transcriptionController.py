@@ -1,4 +1,4 @@
-# controllers/transcription_controller.py
+# controllers/transcriptionController.py
 import os
 from werkzeug.utils import secure_filename
 from flask import request, jsonify, send_file, render_template

@@ -1,4 +1,4 @@
-# models/transcription_model.py
+# models/transcriptionModel.py
 import os
 import uuid
 import whisper

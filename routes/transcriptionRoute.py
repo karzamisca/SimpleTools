@@ -1,4 +1,4 @@
-# routes/transcription_routes.py
+# routes/transcriptionRoute.py
 from flask import Blueprint
 from controllers.transcriptionController import TranscriptionController
 
