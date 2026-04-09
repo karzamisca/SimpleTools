@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Whisper Transcription Service</title>
+    <style>
+      * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+      }
+
+      body {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          min-height: 100vh;
+          padding: 20px;
+      }
+
+      .container {
+          max-width: 900px;
+          margin: 0 auto;
+          background: white;
+          border-radius: 20px;
+          padding: 40px;
+          box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      }
+
+      h1 {
+          color: #333;
+          margin-bottom: 10px;
+          font-size: 2.5em;
+      }
+
+      .subtitle {
+          color: #666;
+          margin-bottom: 30px;
+          font-size: 1.1em;
+      }
+
+      /* Upload View Styles */
+      .upload-view {
+          display: {% if not view %}block{% else %}none{% endif %};
+      }
+
+      /* Transcript View Styles */
+      .transcript-view {
+          display: {% if view == 'transcript' %}block{% else %}none{% endif %};
+      }
+
+      .upload-area {
+          border: 3px dashed #ddd;
+          border-radius: 15px;
+          padding: 40px;
+          text-align: center;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          margin-bottom: 20px;
+      }
+
+      .upload-area:hover {
+          border-color: #667eea;
+          background: #f8f9ff;
+      }
+
+      .upload-area.dragover {
+          border-color: #667eea;
+          background: #f8f9ff;
+          transform: scale(1.02);
+      }
+
+      .upload-icon {
+          font-size: 48px;
+          margin-bottom: 20px;
+      }
+
+      .file-input {
+          display: none;
+      }
+
+      .btn {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: white;
+          border: none;
+          padding: 12px 30px;
+          border-radius: 25px;
+          font-size: 16px;
+          cursor: pointer;
+          transition: transform 0.2s ease;
+          margin: 5px;
+          text-decoration: none;
+          display: inline-block;
+      }
+
+      .btn:hover {
+          transform: translateY(-2px);
+      }
+
+      .btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+      }
+
+      .language-select {
+          margin: 20px 0;
+      }
+
+      .language-select label {
+          margin-right: 15px;
+          cursor: pointer;
+      }
+
+      .progress-container {
+          margin-top: 30px;
+          display: none;
+      }
+
+      .progress-bar {
+          width: 100%;
+          height: 10px;
+          background: #f0f0f0;
+          border-radius: 5px;
+          overflow: hidden;
+      }
+
+      .progress-fill {
+          height: 100%;
+          background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+          width: 0%;
+          transition: width 0.3s ease;
+      }
+
+      .progress-text {
+          margin-top: 10px;
+          color: #666;
+      }
+
+      .result-area {
+          margin-top: 30px;
+          display: none;
+      }
+
+      .result-card {
+          background: #f8f9ff;
+          border-radius: 10px;
+          padding: 20px;
+          margin-top: 15px;
+      }
+
+      .file-info {
+          background: #f8f9ff;
+          padding: 15px;
+          border-radius: 10px;
+          margin-top: 15px;
+          word-break: break-all;
+      }
+
+      .error {
+          color: #e74c3c;
+          margin-top: 10px;
+      }
+
+      .success {
+          color: #27ae60;
+      }
+
+      /* Transcript View Additional Styles */
+      .meta {
+          color: #666;
+          margin-bottom: 20px;
+          padding-bottom: 20px;
+          border-bottom: 1px solid #eee;
+      }
+
+      .transcript-content {
+          background: #f9f9f9;
+          padding: 20px;
+          border-radius: 8px;
+          line-height: 1.6;
+          white-space: pre-wrap;
+          word-wrap: break-word;
+          max-height: 600px;
+          overflow-y: auto;
+      }
+
+      .nav-buttons {
+          margin-bottom: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <!-- Upload View -->
+      <div class="upload-view">
+        <h1>🎙️ Whisper Transcription</h1>
+        <p class="subtitle">
+          Upload your video or audio file and get AI-powered transcription
+        </p>
+
+        <div class="upload-area" id="uploadArea">
+          <div class="upload-icon">📁</div>
+          <h3>Click or drag & drop files here</h3>
+          <p style="color: #999; margin-top: 10px">
+            Supports MP4, AVI, MOV, MKV, MP3, WAV, M4A (max 500MB)
+          </p>
+          <input
+            type="file"
+            id="fileInput"
+            class="file-input"
+            accept=".mp4,.avi,.mov,.mkv,.mp3,.wav,.m4a"
+          />
+        </div>
+
+        <div class="language-select">
+          <label>
+            <input type="radio" name="language" value="en" checked /> English
+          </label>
+          <label>
+            <input type="radio" name="language" value="vi" /> Vietnamese
+          </label>
+          <label>
+            <input type="radio" name="language" value="auto" /> Auto-detect
+          </label>
+        </div>
+
+        <div id="fileInfo" class="file-info" style="display: none"></div>
+
+        <button class="btn" id="uploadBtn" style="display: none">
+          Start Transcription
+        </button>
+
+        <div class="progress-container" id="progressContainer">
+          <h3>Processing...</h3>
+          <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+          <div class="progress-text" id="progressText">Starting...</div>
+        </div>
+
+        <div class="result-area" id="resultArea">
+          <h3 class="success">✓ Transcription Complete!</h3>
+          <div class="result-card">
+            <div id="transcriptPreview"></div>
+            <div style="margin-top: 15px">
+              <button class="btn" id="viewFullBtn">View Full Transcript</button>
+              <button class="btn" id="downloadBtn">Download TXT</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Transcript View -->
+      <div class="transcript-view">
+        <h1>📝 Transcription Result</h1>
+        <div class="meta">
+          <strong>File:</strong> {{ filename }}<br />
+          <strong>Job ID:</strong> {{ job_id }}
+        </div>
+
+        <div class="nav-buttons">
+          <a href="/" class="btn">← Back to Upload</a>
+          <a href="/transcript/{{ job_id }}" class="btn">Download TXT</a>
+        </div>
+
+        <div class="transcript-content">{{ content }}</div>
+      </div>
+    </div>
+
+    <script>
+      // Only run upload script if we're in upload view
+      if (document.querySelector(".upload-view").style.display !== "none") {
+        const uploadArea = document.getElementById("uploadArea");
+        const fileInput = document.getElementById("fileInput");
+        const uploadBtn = document.getElementById("uploadBtn");
+        const fileInfo = document.getElementById("fileInfo");
+        const progressContainer = document.getElementById("progressContainer");
+        const progressFill = document.getElementById("progressFill");
+        const progressText = document.getElementById("progressText");
+        const resultArea = document.getElementById("resultArea");
+        const transcriptPreview = document.getElementById("transcriptPreview");
+
+        let selectedFile = null;
+        let currentJobId = null;
+
+        uploadArea.addEventListener("click", () => fileInput.click());
+
+        uploadArea.addEventListener("dragover", (e) => {
+          e.preventDefault();
+          uploadArea.classList.add("dragover");
+        });
+
+        uploadArea.addEventListener("dragleave", () => {
+          uploadArea.classList.remove("dragover");
+        });
+
+        uploadArea.addEventListener("drop", (e) => {
+          e.preventDefault();
+          uploadArea.classList.remove("dragover");
+          const files = e.dataTransfer.files;
+          if (files.length > 0) {
+            handleFileSelect(files[0]);
+          }
+        });
+
+        fileInput.addEventListener("change", (e) => {
+          if (e.target.files.length > 0) {
+            handleFileSelect(e.target.files[0]);
+          }
+        });
+
+        function handleFileSelect(file) {
+          selectedFile = file;
+          const sizeInMB = (file.size / (1024 * 1024)).toFixed(2);
+          fileInfo.style.display = "block";
+          fileInfo.innerHTML = `
+                    <strong>Selected file:</strong> ${file.name}<br>
+                    <strong>Size:</strong> ${sizeInMB} MB
+                `;
+          uploadBtn.style.display = "inline-block";
+        }
+
+        uploadBtn.addEventListener("click", async () => {
+          if (!selectedFile) return;
+
+          const formData = new FormData();
+          formData.append("file", selectedFile);
+
+          const language = document.querySelector(
+            'input[name="language"]:checked',
+          ).value;
+          formData.append("language", language);
+
+          uploadBtn.disabled = true;
+          progressContainer.style.display = "block";
+          resultArea.style.display = "none";
+
+          try {
+            const response = await fetch("/upload", {
+              method: "POST",
+              body: formData,
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+              currentJobId = data.job_id;
+              startPolling(currentJobId);
+            } else {
+              alert("Error: " + data.error);
+              uploadBtn.disabled = false;
+            }
+          } catch (error) {
+            alert("Upload failed: " + error.message);
+            uploadBtn.disabled = false;
+            progressContainer.style.display = "none";
+          }
+        });
+
+        function startPolling(jobId) {
+          const pollInterval = setInterval(async () => {
+            try {
+              const response = await fetch(`/status/${jobId}`);
+              const data = await response.json();
+
+              progressFill.style.width = data.progress + "%";
+
+              if (data.status === "processing") {
+                if (data.current_chunk) {
+                  progressText.textContent = `Transcribing chunk ${data.current_chunk}...`;
+                } else {
+                  progressText.textContent = `Processing: ${data.progress}%`;
+                }
+              } else if (data.status === "completed") {
+                clearInterval(pollInterval);
+                progressText.textContent = "Complete!";
+                showResult(jobId);
+              } else if (data.status === "error") {
+                clearInterval(pollInterval);
+                progressText.textContent = "Error: " + data.error;
+                uploadBtn.disabled = false;
+              }
+            } catch (error) {
+              console.error("Polling error:", error);
+            }
+          }, 2000);
+        }
+
+        async function showResult(jobId) {
+          try {
+            const response = await fetch(`/view/${jobId}`);
+            const transcriptText = await response.text();
+
+            // Extract just the transcript content (since it returns full HTML)
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(transcriptText, "text/html");
+            const content =
+              doc.querySelector(".transcript-content")?.textContent ||
+              "Transcript loaded";
+
+            const preview = content.substring(0, 300) + "...";
+            transcriptPreview.innerHTML = `<pre style="white-space: pre-wrap; word-wrap: break-word;">${preview}</pre>`;
+
+            resultArea.style.display = "block";
+            uploadBtn.disabled = false;
+
+            document.getElementById("viewFullBtn").onclick = () => {
+              window.open(`/view/${jobId}`, "_blank");
+            };
+
+            document.getElementById("downloadBtn").onclick = () => {
+              window.location.href = `/transcript/${jobId}`;
+            };
+          } catch (error) {
+            console.error("Error showing result:", error);
+          }
+        }
+      }
+    </script>
+  </body>
+</html>
