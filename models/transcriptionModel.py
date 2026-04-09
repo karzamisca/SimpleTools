@@ -12,34 +12,33 @@ class TranscriptionJob:
     
     # Class variable to store all jobs
     _jobs = {}
-    _models = {}  # Changed to dictionary to cache multiple models
+    _models = {}
     
-    def __init__(self, filename, filepath, language='en', model='medium'):  # Added model parameter
+    def __init__(self, filename, filepath, language='en', model='medium'):
         self.id = str(uuid.uuid4())
         self.filename = filename
         self.filepath = filepath
         self.language = language
-        self.model = model  # Store model name per job
-        self.status = 'queued'
+        self.model = model
+        self.status = 'uploading'  # New initial status
         self.progress = 0
         self.current_chunk = None
         self.transcript_path = None
         self.transcript_text = None
         self.error = None
         self.created_at = datetime.now().isoformat()
+        self.total_chunks = 0
+        self.received_chunks = 0
         
         # Store in class dictionary
         TranscriptionJob._jobs[self.id] = self
     
     @classmethod
-    def get_model(cls, model_name='medium'):  # Changed to accept model name parameter
+    def get_model(cls, model_name='medium'):
         """Lazy load Whisper model with caching per model type"""
         if model_name not in cls._models:
             print(f"Loading Whisper model: {model_name}...")
-
-            # Force CPU usage
             device = "cpu"
-
             cls._models[model_name] = whisper.load_model(model_name)
             print(f"Model {model_name} loaded!")
         return cls._models[model_name]
@@ -69,9 +68,11 @@ class TranscriptionJob:
             'progress': self.progress,
             'current_chunk': self.current_chunk,
             'language': self.language,
-            'model': self.model,  # Added model to output
+            'model': self.model,
             'created_at': self.created_at,
-            'error': self.error
+            'error': self.error,
+            'received_chunks': self.received_chunks,
+            'total_chunks': self.total_chunks
         }
     
     def process(self):
@@ -83,25 +84,15 @@ class TranscriptionJob:
             # Load the specific model for this job
             model = self.get_model(self.model)
             
-            # Convert to audio and split into chunks
-            audio = AudioSegment.from_file(self.filepath)
-            chunk_length_ms = Config.CHUNK_LENGTH_MINUTES * 60 * 1000
-            
-            chunks = []
+            # Get all chunks from the chunks folder
             job_chunks_folder = os.path.join(Config.CHUNKS_FOLDER, self.id)
-            os.makedirs(job_chunks_folder, exist_ok=True)
+            chunks = []
             
-            total_chunks = (len(audio) + chunk_length_ms - 1) // chunk_length_ms
-            
-            # Create chunks
-            for i, start in enumerate(range(0, len(audio), chunk_length_ms)):
-                end = min(start + chunk_length_ms, len(audio))
-                chunk = audio[start:end]
-                chunk_name = os.path.join(job_chunks_folder, f"chunk_{i}.mp3")
-                chunk.export(chunk_name, format="mp3")
-                chunks.append(chunk_name)
-                self.progress = int((i + 1) / total_chunks * 30)
-                print(f"Created chunk {i+1}/{total_chunks}")
+            # Sort chunks by index
+            for i in range(self.total_chunks):
+                chunk_file = os.path.join(job_chunks_folder, f"chunk_{i}.mp3")
+                if os.path.exists(chunk_file):
+                    chunks.append(chunk_file)
             
             # Transcribe chunks
             final_text = ""
@@ -111,7 +102,7 @@ class TranscriptionJob:
                 self.current_chunk = f"{idx+1}/{len(chunks)}"
                 result = model.transcribe(chunk_file, language=language_param)
                 final_text += result["text"] + "\n"
-                self.progress = 30 + int((idx + 1) / len(chunks) * 70)
+                self.progress = int((idx + 1) / len(chunks) * 100)
             
             # Save transcription
             self.transcript_path = os.path.join(Config.TRANSCRIPTS_FOLDER, f"{self.id}.txt")
@@ -123,7 +114,8 @@ class TranscriptionJob:
             # Clean up chunks
             for chunk_file in chunks:
                 os.remove(chunk_file)
-            os.rmdir(job_chunks_folder)
+            if os.path.exists(job_chunks_folder):
+                os.rmdir(job_chunks_folder)
             
             self.status = 'completed'
             self.progress = 100

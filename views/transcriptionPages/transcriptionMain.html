@@ -95,6 +95,18 @@
       .language-select input[type="radio"] {
         accent-color: #111;
       }
+      .model-select {
+        margin-bottom: 24px;
+        font-size: 14px;
+        color: #444;
+      }
+      .model-select select {
+        margin-left: 10px;
+        padding: 6px 10px;
+        border: 1px solid #ccc;
+        border-radius: 3px;
+        font-size: 14px;
+      }
       .btn {
         background: #111;
         color: #fff;
@@ -153,10 +165,25 @@
         background: #eee;
         border-radius: 2px;
         overflow: hidden;
+        margin-bottom: 10px;
       }
       .progress-fill {
         height: 100%;
         background: #111;
+        width: 0%;
+        transition: width 0.3s ease;
+      }
+      .upload-progress-bar {
+        width: 100%;
+        height: 3px;
+        background: #e0e0e0;
+        border-radius: 2px;
+        overflow: hidden;
+        margin: 10px 0;
+      }
+      .upload-progress-fill {
+        height: 100%;
+        background: #4caf50;
         width: 0%;
         transition: width 0.3s ease;
       }
@@ -218,13 +245,16 @@
       <div class="upload-view">
         <h1>Phiên Âm Whisper</h1>
         <p class="subtitle">
-          Tải lên tệp video hoặc âm thanh để nhận bản phiên âm bằng AI
+          Tải lên tệp video hoặc âm thanh để nhận bản phiên âm bằng AI (không
+          giới hạn kích thước)
         </p>
 
         <div class="upload-area" id="uploadArea">
           <span class="upload-icon">↑</span>
           <h3>Nhấp hoặc kéo &amp; thả tệp vào đây</h3>
-          <p>Hỗ trợ MP4, AVI, MOV, MKV, MP3, WAV, M4A (tối đa 500MB)</p>
+          <p>
+            Hỗ trợ MP4, AVI, MOV, MKV, MP3, WAV, M4A (không giới hạn kích thước)
+          </p>
           <input
             type="file"
             id="fileInput"
@@ -247,15 +277,37 @@
           >
         </div>
 
+        <div class="model-select">
+          <label
+            >Model Whisper:
+            <select id="modelSelect">
+              <option value="tiny">Tiny (nhanh nhất, độ chính xác thấp)</option>
+              <option value="base">
+                Base (nhanh, độ chính xác trung bình)
+              </option>
+              <option value="small">Small (cân bằng)</option>
+              <option value="medium" selected>
+                Medium (độ chính xác cao, chậm hơn)
+              </option>
+              <option value="large">
+                Large (độ chính xác cao nhất, chậm nhất)
+              </option>
+            </select>
+          </label>
+        </div>
+
         <div id="fileInfo" class="file-info"></div>
         <button class="btn" id="uploadBtn" style="display: none">
           Bắt Đầu Phiên Âm
         </button>
 
         <div class="progress-container" id="progressContainer">
-          <h3>Đang xử lý...</h3>
+          <h3>Đang tải lên và xử lý...</h3>
           <div class="progress-bar">
             <div class="progress-fill" id="progressFill"></div>
+          </div>
+          <div class="upload-progress-bar">
+            <div class="upload-progress-fill" id="uploadProgressFill"></div>
           </div>
           <div class="progress-text" id="progressText">Đang khởi động...</div>
         </div>
@@ -292,6 +344,8 @@
         const fileInfo = document.getElementById("fileInfo");
         const progressContainer = document.getElementById("progressContainer");
         const progressFill = document.getElementById("progressFill");
+        const uploadProgressFill =
+          document.getElementById("uploadProgressFill");
         const progressText = document.getElementById("progressText");
         const resultArea = document.getElementById("resultArea");
         const transcriptPreview = document.getElementById("transcriptPreview");
@@ -325,27 +379,18 @@
 
         uploadBtn.addEventListener("click", async () => {
           if (!selectedFile) return;
-          const formData = new FormData();
-          formData.append("file", selectedFile);
-          formData.append(
-            "language",
-            document.querySelector('input[name="language"]:checked').value,
-          );
+
+          const language = document.querySelector(
+            'input[name="language"]:checked',
+          ).value;
+          const model = document.getElementById("modelSelect").value;
+
           uploadBtn.disabled = true;
           progressContainer.style.display = "block";
           resultArea.style.display = "none";
+
           try {
-            const response = await fetch("/upload", {
-              method: "POST",
-              body: formData,
-            });
-            const data = await response.json();
-            if (response.ok) {
-              startPolling(data.job_id);
-            } else {
-              alert("Lỗi: " + data.error);
-              uploadBtn.disabled = false;
-            }
+            await uploadFileInChunks(selectedFile, language, model);
           } catch (error) {
             alert("Tải lên thất bại: " + error.message);
             uploadBtn.disabled = false;
@@ -353,11 +398,193 @@
           }
         });
 
+        async function uploadFileInChunks(file, language, model) {
+          const CHUNK_SIZE = 3 * 60 * 1000; // 3 minutes in milliseconds
+          let jobId = null;
+
+          // Create audio context to get duration
+          const audioContext = new (
+            window.AudioContext || window.webkitAudioContext
+          )();
+          const arrayBuffer = await file.arrayBuffer();
+          const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+          const duration = audioBuffer.duration * 1000; // Duration in milliseconds
+
+          const totalChunks = Math.ceil(duration / CHUNK_SIZE);
+          progressText.textContent = `Đang chuẩn bị tải lên ${totalChunks} phần...`;
+
+          for (let i = 0; i < totalChunks; i++) {
+            const start = i * CHUNK_SIZE;
+            const end = Math.min(start + CHUNK_SIZE, duration);
+
+            progressText.textContent = `Đang tải lên phần ${i + 1}/${totalChunks}...`;
+
+            // Extract chunk from audio
+            const chunkBlob = await extractAudioChunk(
+              audioBuffer,
+              start,
+              end,
+              file.type,
+            );
+
+            const formData = new FormData();
+            formData.append("chunk", chunkBlob, `chunk_${i}.mp3`);
+            formData.append("chunk_index", i);
+            formData.append("total_chunks", totalChunks);
+            formData.append("filename", file.name);
+            formData.append("language", language);
+            formData.append("model", model);
+
+            if (jobId) {
+              formData.append("job_id", jobId);
+            }
+
+            const response = await fetch("/upload-chunk", {
+              method: "POST",
+              body: formData,
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+              throw new Error(data.error || "Upload failed");
+            }
+
+            jobId = data.job_id;
+
+            // Update upload progress
+            const uploadProgress = ((i + 1) / totalChunks) * 100;
+            uploadProgressFill.style.width = uploadProgress + "%";
+
+            if (data.status === "processing") {
+              progressText.textContent =
+                "Tất cả các phần đã được tải lên! Đang bắt đầu phiên âm...";
+              startPolling(jobId);
+              return;
+            }
+          }
+        }
+
+        async function extractAudioChunk(
+          audioBuffer,
+          startTime,
+          endTime,
+          mimeType,
+        ) {
+          const sampleRate = audioBuffer.sampleRate;
+          const startSample = Math.floor((startTime * sampleRate) / 1000);
+          const endSample = Math.floor((endTime * sampleRate) / 1000);
+          const frameCount = endSample - startSample;
+
+          // Create new audio buffer for chunk
+          const chunkBuffer = new AudioContext().createBuffer(
+            audioBuffer.numberOfChannels,
+            frameCount,
+            sampleRate,
+          );
+
+          // Copy data
+          for (
+            let channel = 0;
+            channel < audioBuffer.numberOfChannels;
+            channel++
+          ) {
+            const channelData = audioBuffer.getChannelData(channel);
+            const chunkData = chunkBuffer.getChannelData(channel);
+            for (let i = 0; i < frameCount; i++) {
+              chunkData[i] = channelData[startSample + i];
+            }
+          }
+
+          // Convert to WAV first, then let server handle conversion
+          const wavBlob = audioBufferToWav(chunkBuffer);
+
+          // If it's already an audio file, return as is, otherwise convert
+          if (mimeType.includes("audio")) {
+            return wavBlob;
+          } else {
+            // For video files, we'll send the audio portion
+            return wavBlob;
+          }
+        }
+
+        function audioBufferToWav(buffer) {
+          const numChannels = buffer.numberOfChannels;
+          const sampleRate = buffer.sampleRate;
+          const format = 1; // PCM
+          const bitDepth = 16;
+
+          let resultBuffer;
+
+          if (numChannels === 2) {
+            resultBuffer = interleave(
+              buffer.getChannelData(0),
+              buffer.getChannelData(1),
+            );
+          } else {
+            resultBuffer = buffer.getChannelData(0);
+          }
+
+          const dataLength = resultBuffer.length * 2;
+          const bufferLength = 44 + dataLength;
+          const arrayBuffer = new ArrayBuffer(bufferLength);
+          const view = new DataView(arrayBuffer);
+
+          // Write WAV header
+          writeString(view, 0, "RIFF");
+          view.setUint32(4, 36 + dataLength, true);
+          writeString(view, 8, "WAVE");
+          writeString(view, 12, "fmt ");
+          view.setUint32(16, 16, true);
+          view.setUint16(20, format, true);
+          view.setUint16(22, numChannels, true);
+          view.setUint32(24, sampleRate, true);
+          view.setUint32(28, sampleRate * 4, true);
+          view.setUint16(32, numChannels * 2, true);
+          view.setUint16(34, bitDepth, true);
+          writeString(view, 36, "data");
+          view.setUint32(40, dataLength, true);
+
+          // Write audio data
+          const offset = 44;
+          for (let i = 0; i < resultBuffer.length; i++) {
+            const sample = Math.max(-1, Math.min(1, resultBuffer[i]));
+            view.setInt16(
+              offset + i * 2,
+              sample < 0 ? sample * 0x8000 : sample * 0x7fff,
+              true,
+            );
+          }
+
+          return new Blob([arrayBuffer], { type: "audio/wav" });
+        }
+
+        function writeString(view, offset, string) {
+          for (let i = 0; i < string.length; i++) {
+            view.setUint8(offset + i, string.charCodeAt(i));
+          }
+        }
+
+        function interleave(left, right) {
+          const length = left.length + right.length;
+          const result = new Float32Array(length);
+
+          let inputIndex = 0;
+          for (let i = 0; i < length; i += 2) {
+            result[i] = left[inputIndex];
+            result[i + 1] = right[inputIndex];
+            inputIndex++;
+          }
+
+          return result;
+        }
+
         function startPolling(jobId) {
           const pollInterval = setInterval(async () => {
             try {
               const data = await (await fetch(`/status/${jobId}`)).json();
               progressFill.style.width = data.progress + "%";
+
               if (data.status === "processing") {
                 progressText.textContent = data.current_chunk
                   ? `Đang phiên âm đoạn ${data.current_chunk}...`

@@ -7,7 +7,7 @@ transcription_bp = Blueprint('transcription', __name__)
 
 # Define routes
 transcription_bp.route('/', methods=['GET'])(TranscriptionController.index)
-transcription_bp.route('/upload', methods=['POST'])(TranscriptionController.upload)
+transcription_bp.route('/upload-chunk', methods=['POST'])(TranscriptionController.upload_chunk)
 transcription_bp.route('/status/<job_id>', methods=['GET'])(TranscriptionController.status)
 transcription_bp.route('/transcript/<job_id>', methods=['GET'])(TranscriptionController.download_transcript)
 transcription_bp.route('/view/<job_id>', methods=['GET'])(TranscriptionController.view_transcript)

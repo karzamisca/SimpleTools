@@ -15,11 +15,11 @@ class Config:
     TRANSCRIPTS_FOLDER = os.environ.get('TRANSCRIPTS_FOLDER') or 'transcripts'
     ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'mp3', 'wav', 'm4a'}
     
-    # Parse MAX_CONTENT_LENGTH from env or use default
-    MAX_CONTENT_LENGTH = int(os.environ.get('MAX_CONTENT_LENGTH', 500 * 1024 * 1024))
+    # No MAX_CONTENT_LENGTH limit for chunked uploads
+    MAX_CONTENT_LENGTH = None
     
     # Transcription settings
-    CHUNK_LENGTH_MINUTES = int(os.environ.get('CHUNK_LENGTH_MINUTES', 10))
+    CHUNK_LENGTH_MINUTES = int(os.environ.get('CHUNK_LENGTH_MINUTES', 3))  # Changed to 3 minutes
     WHISPER_MODEL = os.environ.get('WHISPER_MODEL', 'medium')
     
     # Debug mode

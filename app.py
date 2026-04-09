@@ -10,6 +10,9 @@ def create_app():
     # Load configuration
     app.config.from_object(Config)
     
+    # Remove MAX_CONTENT_LENGTH limit for chunked uploads
+    app.config['MAX_CONTENT_LENGTH'] = None
+    
     # Initialize folders
     Config.init_app()
     

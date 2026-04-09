@@ -14,35 +14,49 @@ class TranscriptionController:
         return render_template('transcriptionPages/transcriptionMain.html')
     
     @staticmethod
-    def upload():
-        """Handle file upload and start transcription job"""
-        if 'file' not in request.files:
-            return jsonify({'error': 'No file part'}), 400
+    def upload_chunk():
+        """Handle chunk upload"""
+        if 'chunk' not in request.files:
+            return jsonify({'error': 'No chunk part'}), 400
         
-        file = request.files['file']
+        chunk_file = request.files['chunk']
+        job_id = request.form.get('job_id')
+        chunk_index = int(request.form.get('chunk_index', 0))
+        total_chunks = int(request.form.get('total_chunks', 1))
+        filename = request.form.get('filename')
         language = request.form.get('language', 'en')
-        model = request.form.get('model', 'medium')  # Added model selection with 'medium' as default
+        model = request.form.get('model', 'medium')
         
-        if file.filename == '':
-            return jsonify({'error': 'No selected file'}), 400
+        if not job_id:
+            # First chunk - create new job
+            job = TranscriptionJob(filename, None, language, model)
+            job_id = job.id
+            job.total_chunks = total_chunks
+        else:
+            job = TranscriptionJob.get_job(job_id)
+            if not job:
+                return jsonify({'error': 'Job not found'}), 404
         
-        if not TranscriptionJob.allowed_file(file.filename):
-            return jsonify({'error': 'File type not allowed'}), 400
+        # Save chunk
+        job_chunks_folder = os.path.join(Config.CHUNKS_FOLDER, job_id)
+        os.makedirs(job_chunks_folder, exist_ok=True)
         
-        # Save uploaded file
-        filename = secure_filename(file.filename)
-        job = TranscriptionJob(filename, None, language, model)  # Pass model parameter
-        filepath = os.path.join(Config.UPLOAD_FOLDER, f"{job.id}_{filename}")
-        file.save(filepath)
-        job.filepath = filepath
+        chunk_path = os.path.join(job_chunks_folder, f"chunk_{chunk_index}.mp3")
+        chunk_file.save(chunk_path)
         
-        # Start processing
-        job.start_processing()
+        # Update job progress
+        job.received_chunks = job.received_chunks + 1 if hasattr(job, 'received_chunks') else 1
+        
+        # If all chunks received, start processing
+        if job.received_chunks == total_chunks:
+            job.start_processing()
         
         return jsonify({
-            'job_id': job.id, 
-            'status': 'queued',
-            'model': model  # Include model in response
+            'job_id': job_id,
+            'chunk_index': chunk_index,
+            'received': job.received_chunks,
+            'total': total_chunks,
+            'status': 'processing' if job.received_chunks == total_chunks else 'uploading'
         })
     
     @staticmethod
