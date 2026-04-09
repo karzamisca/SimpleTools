@@ -1,3 +1,4 @@
+# models/transcription_model.py
 import os
 import uuid
 import whisper
@@ -11,13 +12,14 @@ class TranscriptionJob:
     
     # Class variable to store all jobs
     _jobs = {}
-    _model = None
+    _models = {}  # Changed to dictionary to cache multiple models
     
-    def __init__(self, filename, filepath, language='en'):
+    def __init__(self, filename, filepath, language='en', model='medium'):  # Added model parameter
         self.id = str(uuid.uuid4())
         self.filename = filename
         self.filepath = filepath
         self.language = language
+        self.model = model  # Store model name per job
         self.status = 'queued'
         self.progress = 0
         self.current_chunk = None
@@ -30,13 +32,17 @@ class TranscriptionJob:
         TranscriptionJob._jobs[self.id] = self
     
     @classmethod
-    def get_model(cls):
-        """Lazy load Whisper model"""
-        if cls._model is None:
-            print(f"Loading Whisper model: {Config.WHISPER_MODEL}...")
-            cls._model = whisper.load_model(Config.WHISPER_MODEL)
-            print("Model loaded!")
-        return cls._model
+    def get_model(cls, model_name='medium'):  # Changed to accept model name parameter
+        """Lazy load Whisper model with caching per model type"""
+        if model_name not in cls._models:
+            print(f"Loading Whisper model: {model_name}...")
+
+            # Force CPU usage
+            device = "cpu"
+
+            cls._models[model_name] = whisper.load_model(model_name)
+            print(f"Model {model_name} loaded!")
+        return cls._models[model_name]
     
     @classmethod
     def get_job(cls, job_id):
@@ -63,6 +69,7 @@ class TranscriptionJob:
             'progress': self.progress,
             'current_chunk': self.current_chunk,
             'language': self.language,
+            'model': self.model,  # Added model to output
             'created_at': self.created_at,
             'error': self.error
         }
@@ -73,7 +80,8 @@ class TranscriptionJob:
             self.status = 'processing'
             self.progress = 0
             
-            model = self.get_model()
+            # Load the specific model for this job
+            model = self.get_model(self.model)
             
             # Convert to audio and split into chunks
             audio = AudioSegment.from_file(self.filepath)

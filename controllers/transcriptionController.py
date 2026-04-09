@@ -1,7 +1,8 @@
+# controllers/transcription_controller.py
 import os
 from werkzeug.utils import secure_filename
 from flask import request, jsonify, send_file, render_template
-from models.transcription_model import TranscriptionJob
+from models.transcriptionModel import TranscriptionJob
 from config import Config
 
 class TranscriptionController:
@@ -10,7 +11,7 @@ class TranscriptionController:
     @staticmethod
     def index():
         """Render the main page"""
-        return render_template('index.html')
+        return render_template('transcriptionPages/transcriptionMain.html')
     
     @staticmethod
     def upload():
@@ -20,6 +21,7 @@ class TranscriptionController:
         
         file = request.files['file']
         language = request.form.get('language', 'en')
+        model = request.form.get('model', 'medium')  # Added model selection with 'medium' as default
         
         if file.filename == '':
             return jsonify({'error': 'No selected file'}), 400
@@ -29,7 +31,7 @@ class TranscriptionController:
         
         # Save uploaded file
         filename = secure_filename(file.filename)
-        job = TranscriptionJob(filename, None, language)
+        job = TranscriptionJob(filename, None, language, model)  # Pass model parameter
         filepath = os.path.join(Config.UPLOAD_FOLDER, f"{job.id}_{filename}")
         file.save(filepath)
         job.filepath = filepath
@@ -37,7 +39,11 @@ class TranscriptionController:
         # Start processing
         job.start_processing()
         
-        return jsonify({'job_id': job.id, 'status': 'queued'})
+        return jsonify({
+            'job_id': job.id, 
+            'status': 'queued',
+            'model': model  # Include model in response
+        })
     
     @staticmethod
     def status(job_id):
@@ -78,8 +84,8 @@ class TranscriptionController:
         if not content:
             return "Transcript not found", 404
         
-        return render_template('index.html', 
-                             view='transcript',
+        return render_template('transcriptionPages/transcriptionReview.html', 
+                             view='transcriptionPages',
                              content=content,
                              filename=job.filename,
                              job_id=job_id)

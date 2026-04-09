@@ -1,0 +1,401 @@
+<!-- views/transcriptionPages/transcriptionMain.html -->
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Phiên Âm</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: #f5f5f5;
+        min-height: 100vh;
+        padding: 40px 20px;
+        color: #111;
+      }
+      .container {
+        max-width: 760px;
+        margin: 0 auto;
+        background: #fff;
+        border: 1px solid #e0e0e0;
+        border-radius: 4px;
+        padding: 48px;
+      }
+      h1 {
+        font-size: 22px;
+        font-weight: 500;
+        letter-spacing: -0.3px;
+        margin-bottom: 6px;
+        color: #111;
+      }
+      .subtitle {
+        font-size: 14px;
+        color: #777;
+        margin-bottom: 36px;
+      }
+      .upload-view {
+        display: block;
+      }
+      .transcript-view {
+        display: none;
+      }
+      .upload-area {
+        border: 1.5px dashed #ccc;
+        border-radius: 4px;
+        padding: 48px 32px;
+        text-align: center;
+        cursor: pointer;
+        transition:
+          border-color 0.2s,
+          background 0.2s;
+        margin-bottom: 24px;
+      }
+      .upload-area:hover,
+      .upload-area.dragover {
+        border-color: #111;
+        background: #fafafa;
+      }
+      .upload-icon {
+        font-size: 22px;
+        margin-bottom: 14px;
+        display: block;
+      }
+      .upload-area h3 {
+        font-size: 15px;
+        font-weight: 500;
+        margin-bottom: 6px;
+        color: #222;
+      }
+      .upload-area p {
+        font-size: 13px;
+        color: #999;
+      }
+      .file-input {
+        display: none;
+      }
+      .language-select {
+        display: flex;
+        gap: 24px;
+        margin-bottom: 24px;
+        font-size: 14px;
+        color: #444;
+      }
+      .language-select label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        cursor: pointer;
+      }
+      .language-select input[type="radio"] {
+        accent-color: #111;
+      }
+      .btn {
+        background: #111;
+        color: #fff;
+        border: none;
+        padding: 10px 24px;
+        border-radius: 3px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.15s;
+        margin: 4px 4px 4px 0;
+        text-decoration: none;
+        display: inline-block;
+      }
+      .btn:hover {
+        background: #333;
+      }
+      .btn:disabled {
+        background: #ccc;
+        cursor: not-allowed;
+      }
+      .btn-outline {
+        background: #fff;
+        color: #111;
+        border: 1px solid #ccc;
+      }
+      .btn-outline:hover {
+        background: #f5f5f5;
+        border-color: #999;
+      }
+      .file-info {
+        background: #f9f9f9;
+        border: 1px solid #eee;
+        padding: 14px 16px;
+        border-radius: 3px;
+        margin-bottom: 20px;
+        font-size: 13px;
+        color: #555;
+        line-height: 1.8;
+        word-break: break-all;
+        display: none;
+      }
+      .progress-container {
+        margin-top: 28px;
+        display: none;
+      }
+      .progress-container h3 {
+        font-size: 14px;
+        font-weight: 500;
+        color: #444;
+        margin-bottom: 10px;
+      }
+      .progress-bar {
+        width: 100%;
+        height: 3px;
+        background: #eee;
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      .progress-fill {
+        height: 100%;
+        background: #111;
+        width: 0%;
+        transition: width 0.3s ease;
+      }
+      .progress-text {
+        margin-top: 8px;
+        font-size: 13px;
+        color: #888;
+      }
+      .result-area {
+        margin-top: 28px;
+        display: none;
+        border-top: 1px solid #eee;
+        padding-top: 24px;
+      }
+      .result-label {
+        font-size: 13px;
+        font-weight: 500;
+        color: #111;
+        margin-bottom: 12px;
+      }
+      .result-preview {
+        background: #f9f9f9;
+        border: 1px solid #eee;
+        border-radius: 3px;
+        padding: 16px;
+        font-size: 13px;
+        color: #444;
+        line-height: 1.7;
+        margin-bottom: 16px;
+      }
+      .meta {
+        font-size: 13px;
+        color: #666;
+        margin-bottom: 24px;
+        padding-bottom: 20px;
+        border-bottom: 1px solid #eee;
+        line-height: 1.8;
+      }
+      .transcript-content {
+        background: #f9f9f9;
+        border: 1px solid #eee;
+        border-radius: 3px;
+        padding: 20px;
+        font-size: 14px;
+        line-height: 1.8;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        max-height: 560px;
+        overflow-y: auto;
+        color: #333;
+      }
+      .nav-buttons {
+        margin-bottom: 24px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="upload-view">
+        <h1>Phiên Âm Whisper</h1>
+        <p class="subtitle">
+          Tải lên tệp video hoặc âm thanh để nhận bản phiên âm bằng AI
+        </p>
+
+        <div class="upload-area" id="uploadArea">
+          <span class="upload-icon">↑</span>
+          <h3>Nhấp hoặc kéo &amp; thả tệp vào đây</h3>
+          <p>Hỗ trợ MP4, AVI, MOV, MKV, MP3, WAV, M4A (tối đa 500MB)</p>
+          <input
+            type="file"
+            id="fileInput"
+            class="file-input"
+            accept=".mp4,.avi,.mov,.mkv,.mp3,.wav,.m4a"
+          />
+        </div>
+
+        <div class="language-select">
+          <label
+            ><input type="radio" name="language" value="en" checked /> Tiếng
+            Anh</label
+          >
+          <label
+            ><input type="radio" name="language" value="vi" /> Tiếng Việt</label
+          >
+          <label
+            ><input type="radio" name="language" value="auto" /> Tự động nhận
+            diện</label
+          >
+        </div>
+
+        <div id="fileInfo" class="file-info"></div>
+        <button class="btn" id="uploadBtn" style="display: none">
+          Bắt Đầu Phiên Âm
+        </button>
+
+        <div class="progress-container" id="progressContainer">
+          <h3>Đang xử lý...</h3>
+          <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+          <div class="progress-text" id="progressText">Đang khởi động...</div>
+        </div>
+
+        <div class="result-area" id="resultArea">
+          <div class="result-label">Phiên âm hoàn tất</div>
+          <div class="result-preview" id="transcriptPreview"></div>
+          <button class="btn" id="viewFullBtn">Xem Toàn Bộ</button>
+          <button class="btn btn-outline" id="downloadBtn">
+            Tải Xuống TXT
+          </button>
+        </div>
+      </div>
+
+      <div class="transcript-view">
+        <h1>Kết Quả Phiên Âm</h1>
+        <div class="meta">
+          <strong>Tệp:</strong> {{ filename }}<br />
+          <strong>Mã công việc:</strong> {{ job_id }}
+        </div>
+        <div class="nav-buttons">
+          <a href="/" class="btn btn-outline">← Quay lại</a>
+          <a href="/transcript/{{ job_id }}" class="btn">Tải Xuống TXT</a>
+        </div>
+        <div class="transcript-content">{{ content }}</div>
+      </div>
+    </div>
+
+    <script>
+      if (document.querySelector(".upload-view").style.display !== "none") {
+        const uploadArea = document.getElementById("uploadArea");
+        const fileInput = document.getElementById("fileInput");
+        const uploadBtn = document.getElementById("uploadBtn");
+        const fileInfo = document.getElementById("fileInfo");
+        const progressContainer = document.getElementById("progressContainer");
+        const progressFill = document.getElementById("progressFill");
+        const progressText = document.getElementById("progressText");
+        const resultArea = document.getElementById("resultArea");
+        const transcriptPreview = document.getElementById("transcriptPreview");
+        let selectedFile = null;
+
+        uploadArea.addEventListener("click", () => fileInput.click());
+        uploadArea.addEventListener("dragover", (e) => {
+          e.preventDefault();
+          uploadArea.classList.add("dragover");
+        });
+        uploadArea.addEventListener("dragleave", () =>
+          uploadArea.classList.remove("dragover"),
+        );
+        uploadArea.addEventListener("drop", (e) => {
+          e.preventDefault();
+          uploadArea.classList.remove("dragover");
+          if (e.dataTransfer.files.length > 0)
+            handleFileSelect(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener("change", (e) => {
+          if (e.target.files.length > 0) handleFileSelect(e.target.files[0]);
+        });
+
+        function handleFileSelect(file) {
+          selectedFile = file;
+          const sizeInMB = (file.size / (1024 * 1024)).toFixed(2);
+          fileInfo.style.display = "block";
+          fileInfo.innerHTML = `<strong>Tệp đã chọn:</strong> ${file.name}<br><strong>Kích thước:</strong> ${sizeInMB} MB`;
+          uploadBtn.style.display = "inline-block";
+        }
+
+        uploadBtn.addEventListener("click", async () => {
+          if (!selectedFile) return;
+          const formData = new FormData();
+          formData.append("file", selectedFile);
+          formData.append(
+            "language",
+            document.querySelector('input[name="language"]:checked').value,
+          );
+          uploadBtn.disabled = true;
+          progressContainer.style.display = "block";
+          resultArea.style.display = "none";
+          try {
+            const response = await fetch("/upload", {
+              method: "POST",
+              body: formData,
+            });
+            const data = await response.json();
+            if (response.ok) {
+              startPolling(data.job_id);
+            } else {
+              alert("Lỗi: " + data.error);
+              uploadBtn.disabled = false;
+            }
+          } catch (error) {
+            alert("Tải lên thất bại: " + error.message);
+            uploadBtn.disabled = false;
+            progressContainer.style.display = "none";
+          }
+        });
+
+        function startPolling(jobId) {
+          const pollInterval = setInterval(async () => {
+            try {
+              const data = await (await fetch(`/status/${jobId}`)).json();
+              progressFill.style.width = data.progress + "%";
+              if (data.status === "processing") {
+                progressText.textContent = data.current_chunk
+                  ? `Đang phiên âm đoạn ${data.current_chunk}...`
+                  : `Đang xử lý: ${data.progress}%`;
+              } else if (data.status === "completed") {
+                clearInterval(pollInterval);
+                progressText.textContent = "Hoàn tất!";
+                showResult(jobId);
+              } else if (data.status === "error") {
+                clearInterval(pollInterval);
+                progressText.textContent = "Lỗi: " + data.error;
+                uploadBtn.disabled = false;
+              }
+            } catch (e) {
+              console.error("Lỗi kiểm tra:", e);
+            }
+          }, 2000);
+        }
+
+        async function showResult(jobId) {
+          try {
+            const html = await (await fetch(`/view/${jobId}`)).text();
+            const doc = new DOMParser().parseFromString(html, "text/html");
+            const content =
+              doc.querySelector(".transcript-content")?.textContent ||
+              "Đã tải bản phiên âm";
+            transcriptPreview.innerHTML = `<pre style="white-space:pre-wrap;word-wrap:break-word;margin:0;font-family:inherit">${content.substring(0, 300)}...</pre>`;
+            resultArea.style.display = "block";
+            uploadBtn.disabled = false;
+            document.getElementById("viewFullBtn").onclick = () =>
+              window.open(`/view/${jobId}`, "_blank");
+            document.getElementById("downloadBtn").onclick = () =>
+              (window.location.href = `/transcript/${jobId}`);
+          } catch (e) {
+            console.error("Lỗi hiển thị:", e);
+          }
+        }
+      }
+    </script>
+  </body>
+</html>

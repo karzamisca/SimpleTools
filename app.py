@@ -1,6 +1,7 @@
+# app.py
 from flask import Flask
 from config import Config
-from routes.transcription_routes import transcription_bp
+from routes.transcriptionRoute import transcription_bp
 
 def create_app():
     """Application factory function"""
