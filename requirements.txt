@@ -4,3 +4,4 @@ pydub
 werkzeug
 python-dotenv
 gunicorn
+audioop-lts
