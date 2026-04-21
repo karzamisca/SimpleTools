@@ -1,54 +1,94 @@
 # controllers/scraperZLibraryController.py
-from typing import Dict, List, Optional
-from models.scraperZLibraryModel import ZLibraryScraperModel, Book
+from typing import Dict
+from flask import render_template, request, jsonify, Response
+from models.scraperZLibraryModel import ZLibraryScraperModel
+import json
 
 
 class ScraperController:
-    """Controller handling business logic for book scraping"""
+    """Controller handling all business logic for book scraping"""
     
-    def __init__(self):
-        self.model = ZLibraryScraperModel()
+    _model = ZLibraryScraperModel()
     
-    def search_books(self, query: str, max_pages: Optional[int] = None, headless: bool = True) -> Dict:
-        """
-        Search for books and return results with statistics
+    @classmethod
+    def index(cls):
+        """Render the search page"""
+        return render_template('scraperZLibraryPages/scraperZLibraryMain.html')
+    
+    @classmethod
+    def search_books(cls):
+        """API endpoint to search for books"""
+        data = request.get_json()
         
-        Args:
-            query: Search query string
-            max_pages: Maximum number of pages to scrape (None for all)
-            headless: Run browser in headless mode
+        if not data:
+            return jsonify({'success': False, 'error': 'Invalid request data'}), 400
         
-        Returns:
-            Dictionary containing books and statistics
-        """
-        if not query or len(query.strip()) < 2:
-            return {
-                'success': False,
-                'error': 'Search query must be at least 2 characters long',
-                'books': [],
-                'statistics': {}
-            }
+        query = data.get('query', '').strip()
+        max_pages = data.get('max_pages')
+        headless = data.get('headless', True)
+        
+        if not query:
+            return jsonify({'success': False, 'error': 'Query is required'}), 400
+        
+        if len(query) < 2:
+            return jsonify({'success': False, 'error': 'Search query must be at least 2 characters long'}), 400
         
         try:
-            books = self.model.search_books(query, max_pages, headless)
+            books = cls._model.search_books(query, max_pages, headless)
             
-            return {
+            result = {
                 'success': True,
                 'query': query,
                 'books': [book.to_dict() for book in books],
-                'statistics': self.model.statistics,
+                'statistics': cls._model.statistics,
                 'total_count': len(books)
             }
+            return jsonify(result)
             
         except Exception as e:
-            return {
+            return jsonify({
                 'success': False,
                 'error': str(e),
                 'books': [],
                 'statistics': {}
-            }
+            }), 500
     
-    def format_results_as_text(self, results: Dict) -> str:
+    @classmethod
+    def download_txt(cls):
+        """Download results as text file"""
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'No results provided'}), 400
+        
+        text_content = cls._format_results_as_text(data)
+        
+        return Response(
+            text_content,
+            mimetype='text/plain',
+            headers={
+                'Content-Disposition': f'attachment;filename=zlib_{data.get("query", "search")}_results.txt'
+            }
+        )
+    
+    @classmethod
+    def download_json(cls):
+        """Download results as JSON file"""
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'No results provided'}), 400
+        
+        return Response(
+            json.dumps(data, indent=2, ensure_ascii=False),
+            mimetype='application/json',
+            headers={
+                'Content-Disposition': f'attachment;filename=zlib_{data.get("query", "search")}_results.json'
+            }
+        )
+    
+    @classmethod
+    def _format_results_as_text(cls, results: Dict) -> str:
         """Format results as plain text for download"""
         if not results.get('success'):
             return f"Error: {results.get('error', 'Unknown error')}"
@@ -76,7 +116,6 @@ class ScraperController:
             lines.append("=" * 80)
             lines.append("")
         
-        # Add statistics
         if results.get('statistics'):
             stats = results['statistics']
             lines.append("")
