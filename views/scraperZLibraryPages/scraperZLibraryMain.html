@@ -1,0 +1,772 @@
+<!-- views/scraperZLibraryPages/scraperZLibraryMain.html -->
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tìm Kiếm Sách Z-Library</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+          Arial, sans-serif;
+        background: #fff;
+        min-height: 100vh;
+        padding: 24px;
+        color: #000;
+      }
+
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        background: #fff;
+        border: 1px solid #000;
+      }
+
+      .header {
+        padding: 32px 24px;
+        border-bottom: 1px solid #000;
+      }
+
+      .header h1 {
+        font-size: 2em;
+        font-weight: 400;
+        margin-bottom: 8px;
+        letter-spacing: -0.02em;
+      }
+
+      .header p {
+        font-size: 0.95em;
+        color: #333;
+      }
+
+      .search-section {
+        padding: 24px;
+        border-bottom: 1px solid #000;
+      }
+
+      .search-form {
+        display: flex;
+        gap: 16px;
+        align-items: flex-end;
+        flex-wrap: wrap;
+      }
+
+      .form-group {
+        flex: 1;
+        min-width: 200px;
+      }
+
+      .form-group label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 0.8em;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #333;
+      }
+
+      .form-group input {
+        width: 100%;
+        padding: 12px 0;
+        border: none;
+        border-bottom: 1px solid #000;
+        font-size: 16px;
+        background: transparent;
+        transition: border-color 0.2s;
+      }
+
+      .form-group input:focus {
+        outline: none;
+        border-bottom-width: 2px;
+      }
+
+      .form-group input::placeholder {
+        color: #999;
+      }
+
+      .form-group small {
+        display: block;
+        margin-top: 6px;
+        color: #666;
+        font-size: 0.75em;
+      }
+
+      .checkbox-group {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        margin-top: 16px;
+      }
+
+      .checkbox-group label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        font-size: 0.9em;
+      }
+
+      .checkbox-group input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        cursor: pointer;
+      }
+
+      .btn {
+        padding: 12px 28px;
+        border: 1px solid #000;
+        background: #fff;
+        font-size: 14px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+
+      .btn-primary {
+        background: #000;
+        color: #fff;
+      }
+
+      .btn-primary:hover:not(:disabled) {
+        background: #333;
+      }
+
+      .btn-secondary {
+        background: #fff;
+        color: #000;
+      }
+
+      .btn-secondary:hover:not(:disabled) {
+        background: #f5f5f5;
+      }
+
+      .btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+
+      .results-section {
+        padding: 24px;
+      }
+
+      .stats-bar {
+        display: flex;
+        gap: 32px;
+        padding: 20px 0;
+        border-bottom: 1px solid #000;
+        margin-bottom: 24px;
+        flex-wrap: wrap;
+      }
+
+      .stat-item {
+        flex: 1;
+        min-width: 150px;
+      }
+
+      .stat-label {
+        font-size: 0.75em;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #666;
+        margin-bottom: 6px;
+      }
+
+      .stat-value {
+        font-size: 2.5em;
+        font-weight: 300;
+        color: #000;
+        line-height: 1.2;
+      }
+
+      .books-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 1px;
+        background: #000;
+        border: 1px solid #000;
+        margin-top: 24px;
+      }
+
+      .book-card {
+        background: #fff;
+        padding: 20px;
+        transition: background 0.2s;
+      }
+
+      .book-card:hover {
+        background: #fafafa;
+      }
+
+      .book-title {
+        font-size: 1.1em;
+        font-weight: 500;
+        color: #000;
+        margin-bottom: 8px;
+        line-height: 1.4;
+      }
+
+      .book-authors {
+        color: #555;
+        margin-bottom: 16px;
+        font-size: 0.9em;
+      }
+
+      .book-details {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px 16px;
+        margin-bottom: 16px;
+      }
+
+      .detail-item {
+        font-size: 0.8em;
+      }
+
+      .detail-label {
+        color: #666;
+        text-transform: uppercase;
+        font-size: 0.7em;
+        letter-spacing: 0.3px;
+        margin-bottom: 2px;
+      }
+
+      .detail-value {
+        color: #000;
+      }
+
+      .book-link {
+        display: inline-block;
+        padding: 8px 0;
+        color: #000;
+        text-decoration: none;
+        font-size: 0.85em;
+        border-bottom: 1px solid #000;
+        transition: opacity 0.2s;
+      }
+
+      .book-link:hover {
+        opacity: 0.6;
+      }
+
+      .loading {
+        text-align: center;
+        padding: 60px 20px;
+      }
+
+      .spinner {
+        width: 32px;
+        height: 32px;
+        border: 1px solid #000;
+        border-top-color: transparent;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        margin: 0 auto 20px;
+      }
+
+      @keyframes spin {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+
+      .error-message {
+        background: #fff;
+        border: 1px solid #000;
+        color: #000;
+        padding: 16px 20px;
+        margin: 20px 0;
+      }
+
+      .empty-state {
+        text-align: center;
+        padding: 80px 20px;
+        color: #666;
+      }
+
+      .empty-state h3 {
+        font-weight: 400;
+        color: #000;
+        margin-bottom: 8px;
+      }
+
+      .download-section {
+        display: flex;
+        gap: 12px;
+        margin: 20px 0;
+        flex-wrap: wrap;
+      }
+
+      .stats-detail {
+        margin-top: 32px;
+        padding-top: 24px;
+        border-top: 1px solid #000;
+      }
+
+      .stats-detail h3 {
+        font-weight: 400;
+        font-size: 1.1em;
+        margin-bottom: 20px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .progress-container {
+        margin-top: 20px;
+        color: #666;
+      }
+
+      .progress-text {
+        font-size: 0.85em;
+      }
+
+      hr {
+        border: none;
+        border-top: 1px solid #000;
+        margin: 20px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>Z-Library</h1>
+        <p>Tìm kiếm sách từ thư viện Z-Library</p>
+      </div>
+
+      <div class="search-section">
+        <div class="search-form">
+          <div class="form-group" style="flex: 3">
+            <label for="query">Từ khóa tìm kiếm</label>
+            <input
+              type="text"
+              id="query"
+              placeholder="vd: lập trình python, trí tuệ nhân tạo..."
+            />
+          </div>
+
+          <div class="form-group" style="flex: 1">
+            <label for="maxPages">Theo Trang</label>
+            <input
+              type="number"
+              id="maxPages"
+              placeholder="Tất cả"
+              min="1"
+              max="50"
+            />
+          </div>
+
+          <div class="form-group">
+            <button
+              class="btn btn-primary"
+              id="searchBtn"
+              onclick="searchBooks()"
+            >
+              Tìm kiếm
+            </button>
+          </div>
+        </div>
+
+        <div class="checkbox-group">
+          <label>
+            <input type="checkbox" id="headless" checked />
+            Chạy ẩn (chế độ headless)
+          </label>
+        </div>
+      </div>
+
+      <div class="results-section">
+        <div id="loadingIndicator" class="loading" style="display: none">
+          <div class="spinner"></div>
+          <p>Đang tìm kiếm sách...</p>
+          <div class="progress-container">
+            <div class="progress-text" id="progressText">Đang khởi tạo...</div>
+          </div>
+        </div>
+
+        <div
+          id="errorMessage"
+          class="error-message"
+          style="display: none"
+        ></div>
+
+        <div id="resultsContent">
+          <div class="empty-state">
+            <div style="font-size: 3em; margin-bottom: 20px; font-weight: 300">
+              📚
+            </div>
+            <h3>Bắt đầu tìm kiếm</h3>
+            <p>Nhập từ khóa để tìm sách từ Z-Library</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      let currentResults = null;
+      let searchInProgress = false;
+
+      async function searchBooks() {
+        if (searchInProgress) {
+          return;
+        }
+
+        const query = document.getElementById("query").value.trim();
+        const maxPages = document.getElementById("maxPages").value;
+        const headless = document.getElementById("headless").checked;
+
+        if (!query) {
+          showError("Vui lòng nhập từ khóa tìm kiếm");
+          return;
+        }
+
+        if (query.length < 2) {
+          showError("Từ khóa phải có ít nhất 2 ký tự");
+          return;
+        }
+
+        searchInProgress = true;
+        document.getElementById("loadingIndicator").style.display = "block";
+        document.getElementById("errorMessage").style.display = "none";
+        document.getElementById("resultsContent").innerHTML = "";
+        document.getElementById("progressText").textContent =
+          "Đang khởi tạo...";
+
+        const searchBtn = document.getElementById("searchBtn");
+        searchBtn.disabled = true;
+        searchBtn.textContent = "Đang tìm...";
+
+        try {
+          const response = await fetch("/scraperZLibrary/api/search", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              query: query,
+              max_pages: maxPages ? parseInt(maxPages) : null,
+              headless: headless,
+            }),
+          });
+
+          const data = await response.json();
+
+          if (data.success) {
+            currentResults = data;
+            displayResults(data);
+          } else {
+            showError(data.error || "Có lỗi xảy ra khi tìm kiếm");
+          }
+        } catch (error) {
+          console.error("Search error:", error);
+          showError("Không thể kết nối đến máy chủ.");
+        } finally {
+          searchInProgress = false;
+          document.getElementById("loadingIndicator").style.display = "none";
+          searchBtn.disabled = false;
+          searchBtn.textContent = "Tìm kiếm";
+        }
+      }
+
+      function displayResults(data) {
+        const resultsDiv = document.getElementById("resultsContent");
+
+        if (!data.books || data.books.length === 0) {
+          resultsDiv.innerHTML = `
+            <div class="empty-state">
+              <div style="font-size: 3em; margin-bottom: 20px; font-weight: 300;">🔍</div>
+              <h3>Không tìm thấy sách</h3>
+              <p>Thử từ khóa khác hoặc kiểm tra lại chính tả</p>
+              <p style="margin-top: 10px; font-size: 0.9em;">Từ khóa: "${escapeHtml(data.query)}"</p>
+            </div>
+          `;
+          return;
+        }
+
+        let html = `
+          <div class="stats-bar">
+            <div class="stat-item">
+              <div class="stat-label">Tổng số sách</div>
+              <div class="stat-value">${data.total_count}</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-label">Từ khóa</div>
+              <div class="stat-value" style="font-size: 1.5em;">"${escapeHtml(data.query)}"</div>
+            </div>
+          </div>
+          
+          <div class="download-section">
+            <button class="btn btn-secondary" onclick="downloadResults('txt')">
+              ↓ Tải TXT
+            </button>
+            <button class="btn btn-secondary" onclick="downloadResults('json')">
+              ↓ Tải JSON
+            </button>
+            <button class="btn btn-secondary" onclick="copyResultsToClipboard()">
+              📋 Sao chép
+            </button>
+          </div>
+          
+          <h3 style="font-weight: 400; margin: 24px 0 16px 0; text-transform: uppercase; font-size: 0.9em; letter-spacing: 0.5px;">Kết quả (${data.books.length} sách)</h3>
+          <div class="books-grid">
+        `;
+
+        data.books.forEach((book, index) => {
+          html += `
+            <div class="book-card">
+              <div class="book-title">${index + 1}. ${escapeHtml(book.title)}</div>
+              <div class="book-authors">${escapeHtml(book.authors.join(", ") || "Không rõ")}</div>
+              
+              <div class="book-details">
+                <div class="detail-item">
+                  <div class="detail-label">NXB</div>
+                  <div class="detail-value">${escapeHtml(book.publisher)}</div>
+                </div>
+                <div class="detail-item">
+                  <div class="detail-label">Năm</div>
+                  <div class="detail-value">${escapeHtml(book.year)}</div>
+                </div>
+                <div class="detail-item">
+                  <div class="detail-label">Số trang</div>
+                  <div class="detail-value">${escapeHtml(book.pages)}</div>
+                </div>
+                <div class="detail-item">
+                  <div class="detail-label">Ngôn ngữ</div>
+                  <div class="detail-value">${escapeHtml(book.language)}</div>
+                </div>
+                <div class="detail-item">
+                  <div class="detail-label">Định dạng</div>
+                  <div class="detail-value">${escapeHtml(book.file)}</div>
+                </div>
+              </div>
+              
+              ${
+                book.link !== "N/A"
+                  ? `<a href="${escapeHtml(book.link)}" target="_blank" class="book-link" rel="noopener noreferrer">Xem sách →</a>`
+                  : '<span style="color: #999; font-size: 0.85em;">Không có liên kết</span>'
+              }
+            </div>
+          `;
+        });
+
+        html += "</div>";
+
+        if (data.statistics && Object.keys(data.statistics).length > 0) {
+          html += '<div class="stats-detail">';
+          html += "<h3>Thống kê</h3>";
+          html += '<div class="stats-bar" style="border-bottom: none;">';
+
+          const stats = data.statistics;
+
+          if (stats.languages && Object.keys(stats.languages).length > 0) {
+            const langHtml = Object.entries(stats.languages)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 5)
+              .map(([lang, count]) => {
+                const percentage = ((count / data.total_count) * 100).toFixed(
+                  1,
+                );
+                return `<div style="margin-bottom: 4px;">${escapeHtml(lang)}: ${count} (${percentage}%)</div>`;
+              })
+              .join("");
+
+            html += `
+              <div class="stat-item">
+                <div class="stat-label">Ngôn ngữ phổ biến</div>
+                <div class="stat-value" style="font-size: 0.9em; font-weight: 400;">${langHtml}</div>
+              </div>
+            `;
+          }
+
+          if (stats.formats && Object.keys(stats.formats).length > 0) {
+            const formatHtml = Object.entries(stats.formats)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 5)
+              .map(([fmt, count]) => {
+                const percentage = ((count / data.total_count) * 100).toFixed(
+                  1,
+                );
+                return `<div style="margin-bottom: 4px;">${escapeHtml(fmt)}: ${count} (${percentage}%)</div>`;
+              })
+              .join("");
+
+            html += `
+              <div class="stat-item">
+                <div class="stat-label">Định dạng phổ biến</div>
+                <div class="stat-value" style="font-size: 0.9em; font-weight: 400;">${formatHtml}</div>
+              </div>
+            `;
+          }
+
+          if (stats.years && Object.keys(stats.years).length > 0) {
+            const yearHtml = Object.entries(stats.years)
+              .sort((a, b) => parseInt(b[0]) - parseInt(a[0]))
+              .slice(0, 5)
+              .map(
+                ([year, count]) =>
+                  `<div style="margin-bottom: 4px;">${escapeHtml(year)}: ${count} sách</div>`,
+              )
+              .join("");
+
+            html += `
+              <div class="stat-item">
+                <div class="stat-label">Năm xuất bản gần đây</div>
+                <div class="stat-value" style="font-size: 0.9em; font-weight: 400;">${yearHtml}</div>
+              </div>
+            `;
+          }
+
+          html += "</div>";
+          html += "</div>";
+        }
+
+        resultsDiv.innerHTML = html;
+        resultsDiv.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+
+      function showError(message) {
+        const errorDiv = document.getElementById("errorMessage");
+        errorDiv.textContent = message;
+        errorDiv.style.display = "block";
+
+        document.getElementById("resultsContent").innerHTML = `
+          <div class="empty-state">
+            <div style="font-size: 3em; margin-bottom: 20px; font-weight: 300;">✕</div>
+            <h3>Tìm kiếm thất bại</h3>
+            <p>${escapeHtml(message)}</p>
+            <p style="margin-top: 20px; font-size: 0.9em;">Vui lòng thử lại với từ khóa khác.</p>
+          </div>
+        `;
+
+        errorDiv.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+
+      function downloadResults(format) {
+        if (!currentResults) {
+          alert("Không có kết quả để tải xuống");
+          return;
+        }
+
+        fetch(`/scraperZLibrary/api/download/${format}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(currentResults),
+        })
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error("Tải xuống thất bại");
+            }
+            return response.blob();
+          })
+          .then((blob) => {
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `zlib_${currentResults.query.replace(/\s+/g, "_")}_ket_qua.${format}`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+          })
+          .catch((error) => {
+            console.error("Download error:", error);
+            alert("Không thể tải file: " + error.message);
+          });
+      }
+
+      function copyResultsToClipboard() {
+        if (!currentResults) {
+          alert("Không có kết quả để sao chép");
+          return;
+        }
+
+        let summary = `KẾT QUẢ TÌM KIẾM Z-LIBRARY\n`;
+        summary += `========================\n`;
+        summary += `Từ khóa: ${currentResults.query}\n`;
+        summary += `Tổng số sách: ${currentResults.total_count}\n`;
+        summary += `========================\n\n`;
+
+        currentResults.books.slice(0, 10).forEach((book, index) => {
+          summary += `${index + 1}. ${book.title}\n`;
+          summary += `   Tác giả: ${book.authors.join(", ")}\n`;
+          summary += `   Năm: ${book.year} | Ngôn ngữ: ${book.language} | Định dạng: ${book.file}\n`;
+          summary += `   Link: ${book.link}\n\n`;
+        });
+
+        if (currentResults.books.length > 10) {
+          summary += `... và ${currentResults.books.length - 10} sách khác\n`;
+        }
+
+        navigator.clipboard
+          .writeText(summary)
+          .then(() => {
+            alert("Đã sao chép tóm tắt!");
+          })
+          .catch((err) => {
+            console.error("Failed to copy:", err);
+            alert("Không thể sao chép");
+          });
+      }
+
+      function escapeHtml(text) {
+        if (typeof text !== "string") return text;
+        const div = document.createElement("div");
+        div.textContent = text;
+        return div.innerHTML;
+      }
+
+      document
+        .getElementById("query")
+        .addEventListener("keypress", function (e) {
+          if (e.key === "Enter") {
+            searchBooks();
+          }
+        });
+
+      document.addEventListener("keydown", function (e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+          e.preventDefault();
+          document.getElementById("query").focus();
+        }
+      });
+
+      const progressMessages = [
+        "Đang khởi tạo...",
+        "Đang kết nối Z-Library...",
+        "Đang lấy dữ liệu sách...",
+        "Đang xử lý kết quả...",
+        "Sắp xong...",
+      ];
+
+      let messageIndex = 0;
+      const progressInterval = setInterval(() => {
+        if (searchInProgress) {
+          messageIndex = (messageIndex + 1) % progressMessages.length;
+          const progressElement = document.getElementById("progressText");
+          if (progressElement) {
+            progressElement.textContent = progressMessages[messageIndex];
+          }
+        }
+      }, 2000);
+
+      window.addEventListener("beforeunload", () => {
+        clearInterval(progressInterval);
+      });
+    </script>
+    <script src="/static/header/headerLoader.js?v=1.0"></script>
+  </body>
+</html>

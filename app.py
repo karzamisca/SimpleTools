@@ -2,6 +2,7 @@
 from flask import Flask
 from config import Config
 from routes.transcriptionRoute import transcription_bp
+from routes.scraperZLibraryRoute import scraperZLibraryRoute
 
 def create_app():
     """Application factory function"""
@@ -18,6 +19,7 @@ def create_app():
     
     # Register blueprints
     app.register_blueprint(transcription_bp)
+    app.register_blueprint(scraperZLibraryRoute, url_prefix='/scraperZLibrary')
     
     return app
 
