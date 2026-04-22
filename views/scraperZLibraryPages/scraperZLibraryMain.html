@@ -150,6 +150,16 @@
         background: #f5f5f5;
       }
 
+      .btn-download {
+        background: #000;
+        color: #fff;
+        border-color: #000;
+      }
+
+      .btn-download:hover:not(:disabled) {
+        background: #333;
+      }
+
       .btn:disabled {
         opacity: 0.4;
         cursor: not-allowed;
@@ -201,10 +211,25 @@
         background: #fff;
         padding: 20px;
         transition: background 0.2s;
+        position: relative;
       }
 
       .book-card:hover {
         background: #fafafa;
+      }
+
+      .book-card.selected {
+        background: #f0f0f0;
+      }
+
+      .book-checkbox {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        width: 20px;
+        height: 20px;
+        cursor: pointer;
+        accent-color: #000;
       }
 
       .book-title {
@@ -213,6 +238,7 @@
         color: #000;
         margin-bottom: 8px;
         line-height: 1.4;
+        padding-right: 30px;
       }
 
       .book-authors {
@@ -309,6 +335,36 @@
         flex-wrap: wrap;
       }
 
+      .selection-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 0;
+        margin-bottom: 16px;
+        border-bottom: 1px solid #eee;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      .selection-controls {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .selection-controls label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        font-size: 0.9em;
+      }
+
+      .selection-info {
+        color: #666;
+        font-size: 0.9em;
+      }
+
       .stats-detail {
         margin-top: 32px;
         padding-top: 24px;
@@ -332,10 +388,77 @@
         font-size: 0.85em;
       }
 
+      .download-progress {
+        margin-top: 16px;
+        padding: 12px;
+        background: #f5f5f5;
+        border: 1px solid #ddd;
+      }
+
+      .download-progress-bar {
+        width: 100%;
+        height: 2px;
+        background: #ddd;
+        margin-top: 8px;
+      }
+
+      .download-progress-fill {
+        height: 100%;
+        background: #000;
+        width: 0%;
+        transition: width 0.3s;
+      }
+
       hr {
         border: none;
         border-top: 1px solid #000;
         margin: 20px 0;
+      }
+
+      .modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 1000;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .modal-content {
+        background: #fff;
+        border: 1px solid #000;
+        padding: 32px;
+        max-width: 400px;
+        width: 90%;
+      }
+
+      .modal-content h3 {
+        font-weight: 400;
+        margin-bottom: 16px;
+      }
+
+      .modal-content input {
+        width: 100%;
+        padding: 12px 0;
+        border: none;
+        border-bottom: 1px solid #000;
+        font-size: 16px;
+        margin-bottom: 24px;
+      }
+
+      .modal-content input:focus {
+        outline: none;
+        border-bottom-width: 2px;
+      }
+
+      .modal-actions {
+        display: flex;
+        gap: 12px;
+        justify-content: flex-end;
       }
     </style>
   </head>
@@ -343,7 +466,7 @@
     <div class="container">
       <div class="header">
         <h1>Z-Library</h1>
-        <p>Tìm kiếm sách từ thư viện Z-Library</p>
+        <p>Tìm kiếm và tải sách từ thư viện Z-Library</p>
       </div>
 
       <div class="search-section">
@@ -358,7 +481,7 @@
           </div>
 
           <div class="form-group" style="flex: 1">
-            <label for="maxPages">Theo Trang</label>
+            <label for="maxPages">Theo trang (50 sách/trang)</label>
             <input
               type="number"
               id="maxPages"
@@ -390,7 +513,7 @@
       <div class="results-section">
         <div id="loadingIndicator" class="loading" style="display: none">
           <div class="spinner"></div>
-          <p>Đang tìm kiếm sách...</p>
+          <p id="loadingMessage">Đang tìm kiếm sách...</p>
           <div class="progress-container">
             <div class="progress-text" id="progressText">Đang khởi tạo...</div>
           </div>
@@ -414,9 +537,35 @@
       </div>
     </div>
 
+    <!-- Download Modal -->
+    <div class="modal" id="downloadModal">
+      <div class="modal-content">
+        <h3>Tải sách đã chọn</h3>
+        <p style="margin-bottom: 16px; color: #666">
+          <span id="selectedCount">0</span> sách được chọn
+        </p>
+        <input
+          type="number"
+          id="maxBooksInput"
+          placeholder="Số lượng tối đa (để trống để tải tất cả đã chọn)"
+          min="1"
+        />
+        <div class="modal-actions">
+          <button class="btn btn-secondary" onclick="closeDownloadModal()">
+            Hủy
+          </button>
+          <button class="btn btn-download" onclick="confirmDownloadBooks()">
+            Tải xuống
+          </button>
+        </div>
+      </div>
+    </div>
+
     <script>
       let currentResults = null;
       let searchInProgress = false;
+      let downloadInProgress = false;
+      let selectedBooks = new Set();
 
       async function searchBooks() {
         if (searchInProgress) {
@@ -438,7 +587,10 @@
         }
 
         searchInProgress = true;
+        selectedBooks.clear();
         document.getElementById("loadingIndicator").style.display = "block";
+        document.getElementById("loadingMessage").textContent =
+          "Đang tìm kiếm sách...";
         document.getElementById("errorMessage").style.display = "none";
         document.getElementById("resultsContent").innerHTML = "";
         document.getElementById("progressText").textContent =
@@ -517,15 +669,42 @@
             <button class="btn btn-secondary" onclick="copyResultsToClipboard()">
               📋 Sao chép
             </button>
+            <button class="btn btn-download" onclick="openDownloadModal()">
+              📦 Tải sách đã chọn
+            </button>
           </div>
           
-          <h3 style="font-weight: 400; margin: 24px 0 16px 0; text-transform: uppercase; font-size: 0.9em; letter-spacing: 0.5px;">Kết quả (${data.books.length} sách)</h3>
+          <div class="selection-bar">
+            <div class="selection-controls">
+              <label>
+                <input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this.checked)">
+                Chọn tất cả
+              </label>
+              <button class="btn btn-secondary" style="padding: 6px 16px; font-size: 12px;" onclick="clearSelection()">
+                Bỏ chọn
+              </button>
+            </div>
+            <div class="selection-info" id="selectionInfo">
+              Đã chọn 0 sách
+            </div>
+          </div>
+          
+          <h3 style="font-weight: 400; margin: 24px 0 16px 0; text-transform: uppercase; font-size: 0.9em; letter-spacing: 0.5px;">
+            Kết quả (${data.books.length} sách)
+          </h3>
           <div class="books-grid">
         `;
 
         data.books.forEach((book, index) => {
+          const bookId = `book-${index}`;
           html += `
-            <div class="book-card">
+            <div class="book-card" id="${bookId}">
+              <input 
+                type="checkbox" 
+                class="book-checkbox" 
+                data-book-index="${index}"
+                onchange="toggleBookSelection(${index}, this.checked)"
+              >
               <div class="book-title">${index + 1}. ${escapeHtml(book.title)}</div>
               <div class="book-authors">${escapeHtml(book.authors.join(", ") || "Không rõ")}</div>
               
@@ -633,7 +812,170 @@
         }
 
         resultsDiv.innerHTML = html;
+        updateSelectionInfo();
         resultsDiv.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+
+      function toggleBookSelection(index, checked) {
+        if (checked) {
+          selectedBooks.add(index);
+          document.getElementById(`book-${index}`).classList.add("selected");
+        } else {
+          selectedBooks.delete(index);
+          document.getElementById(`book-${index}`).classList.remove("selected");
+        }
+        updateSelectionInfo();
+        updateSelectAllCheckbox();
+      }
+
+      function toggleSelectAll(checked) {
+        if (!currentResults || !currentResults.books) return;
+
+        if (checked) {
+          currentResults.books.forEach((_, index) => {
+            selectedBooks.add(index);
+            const card = document.getElementById(`book-${index}`);
+            if (card) card.classList.add("selected");
+            const checkbox = document.querySelector(
+              `[data-book-index="${index}"]`,
+            );
+            if (checkbox) checkbox.checked = true;
+          });
+        } else {
+          selectedBooks.clear();
+          document
+            .querySelectorAll(".book-card")
+            .forEach((card) => card.classList.remove("selected"));
+          document
+            .querySelectorAll(".book-checkbox")
+            .forEach((cb) => (cb.checked = false));
+        }
+        updateSelectionInfo();
+      }
+
+      function clearSelection() {
+        selectedBooks.clear();
+        document
+          .querySelectorAll(".book-card")
+          .forEach((card) => card.classList.remove("selected"));
+        document
+          .querySelectorAll(".book-checkbox")
+          .forEach((cb) => (cb.checked = false));
+        document.getElementById("selectAllCheckbox").checked = false;
+        updateSelectionInfo();
+      }
+
+      function updateSelectionInfo() {
+        const count = selectedBooks.size;
+        document.getElementById("selectionInfo").textContent =
+          `Đã chọn ${count} sách`;
+      }
+
+      function updateSelectAllCheckbox() {
+        if (!currentResults || !currentResults.books) return;
+        const selectAll = document.getElementById("selectAllCheckbox");
+        if (selectAll) {
+          selectAll.checked =
+            selectedBooks.size === currentResults.books.length;
+        }
+      }
+
+      function openDownloadModal() {
+        if (!currentResults || !currentResults.books) {
+          alert("Không có sách để tải");
+          return;
+        }
+
+        if (selectedBooks.size === 0) {
+          alert("Vui lòng chọn ít nhất một cuốn sách");
+          return;
+        }
+
+        document.getElementById("selectedCount").textContent =
+          selectedBooks.size;
+        document.getElementById("downloadModal").style.display = "flex";
+      }
+
+      function closeDownloadModal() {
+        document.getElementById("downloadModal").style.display = "none";
+      }
+
+      function confirmDownloadBooks() {
+        closeDownloadModal();
+
+        const maxBooksInput = document.getElementById("maxBooksInput").value;
+        const maxBooks = maxBooksInput ? parseInt(maxBooksInput) : null;
+
+        downloadSelectedBooks(maxBooks);
+      }
+
+      async function downloadSelectedBooks(maxBooks) {
+        if (downloadInProgress) {
+          alert("Đang tải sách, vui lòng đợi...");
+          return;
+        }
+
+        if (!currentResults || !currentResults.books) {
+          alert("Không có sách để tải");
+          return;
+        }
+
+        if (selectedBooks.size === 0) {
+          alert("Vui lòng chọn ít nhất một cuốn sách");
+          return;
+        }
+
+        const selectedBooksList = Array.from(selectedBooks)
+          .sort((a, b) => a - b)
+          .slice(0, maxBooks || undefined)
+          .map((index) => currentResults.books[index]);
+
+        downloadInProgress = true;
+
+        document.getElementById("loadingIndicator").style.display = "block";
+        document.getElementById("loadingMessage").textContent =
+          "Đang tải sách...";
+        document.getElementById("progressText").textContent =
+          `Đang tải ${selectedBooksList.length} sách...`;
+
+        const headless = document.getElementById("headless").checked;
+
+        try {
+          const response = await fetch("/scraperZLibrary/api/download/books", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              books: selectedBooksList,
+              max_books: maxBooks,
+              query: currentResults.query,
+              headless: headless,
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error("Tải xuống thất bại");
+          }
+
+          const blob = await response.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `zlib_sach_${currentResults.query.replace(/\s+/g, "_")}.zip`;
+          document.body.appendChild(a);
+          a.click();
+          window.URL.revokeObjectURL(url);
+          document.body.removeChild(a);
+
+          alert(`Đã tải thành công ${selectedBooksList.length} sách!`);
+        } catch (error) {
+          console.error("Download error:", error);
+          alert("Không thể tải sách: " + error.message);
+        } finally {
+          downloadInProgress = false;
+          document.getElementById("loadingIndicator").style.display = "none";
+        }
       }
 
       function showError(message) {
@@ -743,6 +1085,15 @@
           document.getElementById("query").focus();
         }
       });
+
+      // Close modal when clicking outside
+      document
+        .getElementById("downloadModal")
+        .addEventListener("click", function (e) {
+          if (e.target === this) {
+            closeDownloadModal();
+          }
+        });
 
       const progressMessages = [
         "Đang khởi tạo...",

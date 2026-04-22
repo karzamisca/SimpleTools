@@ -3,5 +3,6 @@ openai-whisper
 pydub
 werkzeug
 python-dotenv
+playwright
 gunicorn
 audioop-lts

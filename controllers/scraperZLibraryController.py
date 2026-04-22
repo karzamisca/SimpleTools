@@ -135,3 +135,34 @@ class ScraperController:
                     lines.append(f"  {fmt}: {count} books")
         
         return "\n".join(lines)
+    
+    # Add this method to ScraperController class in controllers/scraperZLibraryController.py
+
+    @classmethod
+    def download_books_zip(cls):
+        """Download actual book files as a zip archive"""
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        books = data.get('books', [])
+        max_books = data.get('max_books')
+        headless = data.get('headless', True)
+        
+        if not books:
+            return jsonify({'error': 'No books provided'}), 400
+        
+        try:
+            zip_content = cls._model.download_books(books, max_books, headless)
+            
+            return Response(
+                zip_content,
+                mimetype='application/zip',
+                headers={
+                    'Content-Disposition': f'attachment;filename=zlib_books_{data.get("query", "download")}.zip'
+                }
+            )
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
