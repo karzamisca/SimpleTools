@@ -7,6 +7,8 @@ import os
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 from playwright.sync_api import sync_playwright, Page, BrowserContext
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 
 @dataclass
@@ -43,6 +45,7 @@ class ZLibraryScraperModel:
     """Model handling Z-Library scraping operations"""
     
     BASE_URL = "https://z-library.sk"
+    MAX_WORKERS = 5  # Fixed number of concurrent download threads
     
     # Account credentials - UPDATE THESE
     LOGIN_EMAIL = os.environ.get("ZLIBRARY_EMAIL")
@@ -52,6 +55,8 @@ class ZLibraryScraperModel:
         self.books: List[Book] = []
         self.statistics: Dict = {}
         self._is_logged_in = False
+        self._download_lock = threading.Lock()
+        self._download_progress = {'completed': 0, 'total': 0, 'failed': 0}
     
     def _login(self, context: BrowserContext) -> Page:
         """Login to Z-Library account"""
@@ -182,11 +187,91 @@ class ZLibraryScraperModel:
         
         return download_url, file_size
     
-    def _download_file(self, page: Page) -> Optional[bytes]:
+    def _download_single_book(self, book_data: Dict, idx: int, total: int, headless: bool = True) -> Optional[Dict]:
+        """Download a single book using its own browser instance"""
+        thread_id = threading.current_thread().name
+        print(f"\n[{idx}/{total}] [{thread_id}] Starting: {book_data['title'][:50]}...")
+        
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=headless)
+                context = browser.new_context(
+                    viewport={'width': 1280, 'height': 800},
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    accept_downloads=True
+                )
+                
+                # Login for this browser instance
+                page = self._login(context)
+                
+                book_link = book_data.get('link')
+                if not book_link or book_link == 'N/A':
+                    print(f"[{idx}/{total}] ⚠ No link available, skipping")
+                    browser.close()
+                    return None
+                
+                try:
+                    print(f"[{idx}/{total}] Navigating to book page...")
+                    page.goto(book_link, timeout=30000)
+                    page.wait_for_load_state("networkidle")
+                    time.sleep(1)
+                    
+                    # Extract download info
+                    download_url, file_size = self._extract_download_info(page)
+                    
+                    # Download file
+                    file_content = self._download_file_from_page(page)
+                    
+                    if file_content and len(file_content) > 0:
+                        safe_title = re.sub(r'[^\w\s-]', '', book_data['title'][:50])
+                        safe_title = re.sub(r'[-\s]+', '_', safe_title)
+                        if not safe_title:
+                            safe_title = f"book_{idx}"
+                        
+                        extension = book_data.get('file', 'txt').split(',')[0].strip().lower()
+                        if extension == 'N/A' or not extension:
+                            extension = 'txt'
+                        
+                        filename = f"{safe_title}.{extension}"
+                        
+                        result = {
+                            'filename': filename,
+                            'content': file_content,
+                            'size': len(file_content),
+                            'download_url': download_url,
+                            'file_size': file_size
+                        }
+                        
+                        with self._download_lock:
+                            self._download_progress['completed'] += 1
+                            completed = self._download_progress['completed']
+                            print(f"[{idx}/{total}] ✅ Success: {filename} ({len(file_content)} bytes) - Progress: {completed}/{total}")
+                        
+                        browser.close()
+                        return result
+                    else:
+                        with self._download_lock:
+                            self._download_progress['failed'] += 1
+                        print(f"[{idx}/{total}] ❌ No file content received")
+                        browser.close()
+                        return None
+                
+                except Exception as e:
+                    with self._download_lock:
+                        self._download_progress['failed'] += 1
+                    print(f"[{idx}/{total}] ❌ Error: {e}")
+                    browser.close()
+                    return None
+                
+        except Exception as e:
+            with self._download_lock:
+                self._download_progress['failed'] += 1
+            print(f"[{idx}/{total}] ❌ Browser error: {e}")
+            return None
+    
+    def _download_file_from_page(self, page: Page) -> Optional[bytes]:
         """Download a single file from the current book page and return its content"""
         try:
-            print("    Looking for download button...")
-            
             download_btn = page.query_selector('a.addDownloadedBook')
             if not download_btn:
                 download_btn = page.query_selector('a[class*="addDownloadedBook"]')
@@ -196,64 +281,47 @@ class ZLibraryScraperModel:
                 download_btn = page.query_selector('a[href*="/dl/"]')
             
             if download_btn:
-                print("    ✓ Found download button")
-                
                 href = download_btn.get_attribute('href')
                 if href:
                     full_url = f"{self.BASE_URL}{href}" if not href.startswith('http') else href
-                    print(f"    Download URL: {full_url}")
                     
                     try:
                         with page.expect_download(timeout=30000) as download_info:
                             page.goto(full_url, timeout=30000)
                         
                         download = download_info.value
-                        print(f"    Download started: {download.suggested_filename}")
-                        
                         time.sleep(2)
                         file_content = download.read_bytes()
-                        print(f"    ✓ Downloaded {len(file_content)} bytes")
                         return file_content
                         
-                    except Exception as e1:
-                        print(f"    Method 1 failed: {e1}")
-                        
+                    except Exception:
                         try:
-                            print("    Trying Method 2: Click button...")
                             with page.expect_download(timeout=30000) as download_info:
                                 download_btn.click()
                             
                             download = download_info.value
                             time.sleep(2)
                             file_content = download.read_bytes()
-                            print(f"    ✓ Downloaded {len(file_content)} bytes via click")
                             return file_content
                             
-                        except Exception as e2:
-                            print(f"    Method 2 failed: {e2}")
-                            
+                        except Exception:
                             try:
-                                print("    Trying Method 3: Check temp file...")
                                 download = download_info.value
                                 temp_path = download.path()
                                 if temp_path and os.path.exists(temp_path):
                                     time.sleep(1)
                                     with open(temp_path, 'rb') as f:
                                         file_content = f.read()
-                                    print(f"    ✓ Read {len(file_content)} bytes from temp file")
                                     return file_content
-                            except Exception as e3:
-                                print(f"    Method 3 failed: {e3}")
+                            except Exception:
+                                pass
                 
                 return None
             else:
-                print("    ✗ Download button not found on page")
                 return None
             
         except Exception as e:
-            print(f"    Error downloading file: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"    Download error: {e}")
             return None
     
     def extract_books_from_table(self, page: Page) -> List[Book]:
@@ -338,7 +406,6 @@ class ZLibraryScraperModel:
             if match:
                 return int(match.group(1))
             
-            # Try alternative selectors
             result_count = page.query_selector('.totalCount, .search-result-count')
             if result_count:
                 text = result_count.text_content()
@@ -398,11 +465,9 @@ class ZLibraryScraperModel:
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             )
             
-            # LOGIN BEFORE SEARCHING
             page = self._login(context)
             
             try:
-                # Construct URL for specific page
                 page_url = f"{self.BASE_URL}/s/{encoded_query}?view=table"
                 if page_num > 1:
                     page_url += f"&page={page_num}"
@@ -412,13 +477,11 @@ class ZLibraryScraperModel:
                 page.wait_for_load_state("networkidle")
                 time.sleep(2)
                 
-                # Get total pages available and total books count
                 total_pages_available = self.get_total_pages(page)
                 total_books_count = self.get_total_books_count(page)
                 print(f"Total pages available: {total_pages_available}")
                 print(f"Total books found: {total_books_count}")
                 
-                # Extract books from current page
                 try:
                     page.wait_for_selector('table.table_book tbody tr', timeout=10000)
                 except:
@@ -442,84 +505,63 @@ class ZLibraryScraperModel:
         return all_books, total_pages_available, total_books_count
     
     def download_books(self, books: List[Dict], max_books: Optional[int] = None, headless: bool = True) -> bytes:
-        """Download actual book files and zip them together"""
-        downloaded_files = []
+        """Download actual book files concurrently and zip them together"""
         books_to_download = books[:max_books] if max_books else books
+        total_books = len(books_to_download)
         
-        print(f"\n📚 Starting download of {len(books_to_download)} books...")
+        # Reset progress counters
+        self._download_progress = {'completed': 0, 'total': total_books, 'failed': 0}
         
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=headless)
-            context = browser.new_context(
-                viewport={'width': 1280, 'height': 800},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                accept_downloads=True
-            )
+        print(f"\n{'='*60}")
+        print(f"📚 Starting MULTI-THREADED DOWNLOAD")
+        print(f"📚 Total books: {total_books}")
+        print(f"📚 Concurrent workers: {self.MAX_WORKERS}")
+        print(f"{'='*60}")
+        
+        downloaded_files = []
+        
+        # Use ThreadPoolExecutor for concurrent downloads
+        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
+            # Submit all download tasks
+            future_to_book = {
+                executor.submit(
+                    self._download_single_book, 
+                    book_data, 
+                    idx, 
+                    total_books, 
+                    headless
+                ): (book_data, idx)
+                for idx, book_data in enumerate(books_to_download, 1)
+            }
             
-            # LOGIN BEFORE DOWNLOADING
-            page = self._login(context)
-            
-            try:
-                for idx, book_data in enumerate(books_to_download, 1):
-                    print(f"\n[{idx}/{len(books_to_download)}] Processing: {book_data['title'][:50]}...")
-                    
-                    book_link = book_data.get('link')
-                    if not book_link or book_link == 'N/A':
-                        print(f"  ⚠ No link available, skipping")
-                        continue
-                    
-                    try:
-                        print(f"  Navigating to: {book_link}")
-                        page.goto(book_link, timeout=30000)
-                        page.wait_for_load_state("networkidle")
-                        time.sleep(2)
-                        
-                        self._extract_download_info(page)
-                        file_content = self._download_file(page)
-                        
-                        if file_content and len(file_content) > 0:
-                            safe_title = re.sub(r'[^\w\s-]', '', book_data['title'][:50])
-                            safe_title = re.sub(r'[-\s]+', '_', safe_title)
-                            if not safe_title:
-                                safe_title = f"book_{idx}"
-                            
-                            extension = book_data.get('file', 'txt').split(',')[0].strip().lower()
-                            if extension == 'N/A' or not extension:
-                                extension = 'txt'
-                            
-                            filename = f"{safe_title}.{extension}"
-                            
-                            downloaded_files.append({
-                                'filename': filename,
-                                'content': file_content,
-                                'size': len(file_content)
-                            })
-                            print(f"  ✅ Successfully added to ZIP: {filename} ({len(file_content)} bytes)")
-                        else:
-                            print(f"  ❌ No file content received")
-                    
-                    except Exception as e:
-                        print(f"  ❌ Error processing book: {e}")
-                        continue
-                    
-                    time.sleep(2)
-                
-            except Exception as e:
-                print(f"Error during download process: {e}")
-                import traceback
-                traceback.print_exc()
-            finally:
-                browser.close()
+            # Process completed tasks as they finish
+            for future in as_completed(future_to_book):
+                book_data, idx = future_to_book[future]
+                try:
+                    result = future.result()
+                    if result:
+                        downloaded_files.append(result)
+                except Exception as e:
+                    print(f"[{idx}/{total_books}] ❌ Thread error: {e}")
+                    with self._download_lock:
+                        self._download_progress['failed'] += 1
         
-        print(f"\n📦 Creating ZIP archive with {len(downloaded_files)} files...")
+        print(f"\n{'='*60}")
+        print(f"📊 Download Summary:")
+        print(f"  ✅ Successfully downloaded: {len(downloaded_files)} books")
+        print(f"  ❌ Failed downloads: {self._download_progress['failed']} books")
+        print(f"{'='*60}")
+        
+        # Create ZIP archive
+        print(f"\n📦 Creating ZIP archive...")
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             for file_info in downloaded_files:
                 zip_file.writestr(file_info['filename'], file_info['content'])
-                print(f"  Added to ZIP: {file_info['filename']} ({file_info['size']} bytes)")
+                print(f"  Added: {file_info['filename']} ({file_info['size']} bytes)")
         
         zip_buffer.seek(0)
         total_size = zip_buffer.getbuffer().nbytes
-        print(f"\n✅ Created ZIP archive: {total_size} bytes with {len(downloaded_files)} files")
+        print(f"\n✅ ZIP created: {total_size:,} bytes ({total_size/1024/1024:.2f} MB)")
         
         return zip_buffer.getvalue()
