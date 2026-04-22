@@ -24,7 +24,7 @@ class ScraperController:
             return jsonify({'success': False, 'error': 'Invalid request data'}), 400
         
         query = data.get('query', '').strip()
-        page = data.get('page', 1)
+        page = data.get('page', 1)  # Get page parameter
         headless = data.get('headless', True)
         
         if not query:
@@ -34,7 +34,10 @@ class ScraperController:
             return jsonify({'success': False, 'error': 'Search query must be at least 2 characters long'}), 400
         
         try:
+            # Get books for specific page
             books, total_pages, total_books = cls._model.search_books(query, page, None, headless)
+            
+            # Calculate statistics for current page books
             statistics = cls._model.statistics
             
             result = {
@@ -42,10 +45,10 @@ class ScraperController:
                 'query': query,
                 'books': [book.to_dict() for book in books],
                 'statistics': statistics,
-                'total_count': len(books),
+                'total_count': len(books),  # Count for current page
                 'current_page': page,
                 'total_pages': total_pages,
-                'total_books_count': total_books
+                'total_books_count': total_books  # Total books across all pages
             }
             return jsonify(result)
             
@@ -95,7 +98,7 @@ class ScraperController:
     
     @classmethod
     def download_books_zip(cls):
-        """Download actual book files as a zip archive using multi-threading"""
+        """Download actual book files as a zip archive"""
         data = request.get_json()
         
         if not data:
@@ -109,7 +112,7 @@ class ScraperController:
             return jsonify({'error': 'No books provided'}), 400
         
         try:
-            print(f"\n📚 Controller: Starting multi-threaded download of {len(books)} books...")
+            print(f"\n📚 Controller: Starting download of {len(books)} books...")
             
             zip_content = cls._model.download_books(books, max_books, headless)
             
@@ -173,6 +176,7 @@ class ScraperController:
             lines.append("=" * 80)
             lines.append("")
         
+        # Add statistics
         if results.get('statistics'):
             stats = results['statistics']
             lines.append("")
@@ -192,6 +196,12 @@ class ScraperController:
                 for fmt, count in sorted(stats['formats'].items(), key=lambda x: x[1], reverse=True):
                     percentage = (count / results['total_count']) * 100 if results['total_count'] > 0 else 0
                     lines.append(f"  {fmt}: {count} books ({percentage:.1f}%)")
+            
+            if stats.get('years'):
+                lines.append("\nPublication Years (Top 10):")
+                sorted_years = sorted(stats['years'].items(), key=lambda x: x[1], reverse=True)[:10]
+                for year, count in sorted_years:
+                    lines.append(f"  {year}: {count} books")
         
         return "\n".join(lines)
     
