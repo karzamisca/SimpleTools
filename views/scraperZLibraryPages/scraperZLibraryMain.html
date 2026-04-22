@@ -393,6 +393,17 @@
         border-top: 1px solid #000;
         margin: 20px 0;
       }
+
+      .load-more-container {
+        margin-top: 32px;
+        text-align: center;
+      }
+
+      .load-more-btn {
+        width: 100%;
+        padding: 16px;
+        font-size: 1em;
+      }
     </style>
   </head>
   <body>
@@ -413,22 +424,11 @@
             />
           </div>
 
-          <div class="form-group" style="flex: 1">
-            <label for="maxPages">Theo trang (50 sách/trang)</label>
-            <input
-              type="number"
-              id="maxPages"
-              placeholder="Tất cả"
-              value="1"
-              disabled
-            />
-          </div>
-
           <div class="form-group">
             <button
               class="btn btn-primary"
               id="searchBtn"
-              onclick="searchBooks()"
+              onclick="searchBooks(true)"
             >
               Tìm kiếm
             </button>
@@ -474,16 +474,24 @@
       let currentResults = null;
       let searchInProgress = false;
       let downloadInProgress = false;
+      let loadMoreInProgress = false;
       let selectedBooks = new Set();
+      let currentQuery = "";
+      let currentPage = 1;
+      let totalPagesAvailable = 0;
+      let headlessMode = true;
+      let totalBooksCount = 0;
 
-      async function searchBooks() {
+      async function searchBooks(resetResults = true) {
         if (searchInProgress) {
           return;
         }
 
         const query = document.getElementById("query").value.trim();
-        const maxPages = document.getElementById("maxPages").value;
         const headless = document.getElementById("headless").checked;
+
+        headlessMode = headless;
+        currentQuery = query;
 
         if (!query) {
           showError("Vui lòng nhập từ khóa tìm kiếm");
@@ -496,20 +504,33 @@
         }
 
         searchInProgress = true;
-        selectedBooks.clear();
+
+        if (resetResults) {
+          selectedBooks.clear();
+          currentPage = 1;
+          currentResults = null;
+        }
+
         document.getElementById("loadingIndicator").style.display = "block";
-        document.getElementById("loadingMessage").textContent =
-          "Đang tìm kiếm sách...";
+        document.getElementById("loadingMessage").textContent = resetResults
+          ? "Đang tìm kiếm sách..."
+          : `Đang tải trang ${currentPage + 1}...`;
         document.getElementById("errorMessage").style.display = "none";
-        document.getElementById("resultsContent").innerHTML = "";
+
+        if (resetResults) {
+          document.getElementById("resultsContent").innerHTML = "";
+        }
+
         document.getElementById("progressText").textContent =
           "Đang khởi tạo...";
 
         const searchBtn = document.getElementById("searchBtn");
         searchBtn.disabled = true;
-        searchBtn.textContent = "Đang tìm...";
+        searchBtn.textContent = resetResults ? "Đang tìm..." : "Đang tải...";
 
         try {
+          const nextPage = resetResults ? 1 : currentPage + 1;
+
           const response = await fetch("/scraperZLibrary/api/search", {
             method: "POST",
             headers: {
@@ -517,7 +538,7 @@
             },
             body: JSON.stringify({
               query: query,
-              max_pages: maxPages ? parseInt(maxPages) : null,
+              page: nextPage,
               headless: headless,
             }),
           });
@@ -525,8 +546,35 @@
           const data = await response.json();
 
           if (data.success) {
-            currentResults = data;
-            displayResults(data);
+            if (resetResults) {
+              currentResults = data;
+              currentPage = data.current_page || 1;
+              totalPagesAvailable = data.total_pages || 1;
+              totalBooksCount = data.total_books_count || data.books.length;
+              displayResults(data);
+            } else {
+              // Merge new books with existing results
+              if (currentResults) {
+                currentResults.books = [...currentResults.books, ...data.books];
+                currentResults.total_count = currentResults.books.length;
+                currentPage = data.current_page;
+                totalPagesAvailable = data.total_pages;
+                totalBooksCount = data.total_books_count || totalBooksCount;
+                appendBooksToGrid(
+                  data.books,
+                  currentResults.books.length - data.books.length,
+                );
+                updateStatsBar(currentResults);
+                updateResultCount();
+                updateSelectionInfo();
+              } else {
+                currentResults = data;
+                currentPage = data.current_page || 1;
+                totalPagesAvailable = data.total_pages || 1;
+                totalBooksCount = data.total_books_count || data.books.length;
+                displayResults(data);
+              }
+            }
           } else {
             showError(data.error || "Có lỗi xảy ra khi tìm kiếm");
           }
@@ -535,9 +583,127 @@
           showError("Không thể kết nối đến máy chủ.");
         } finally {
           searchInProgress = false;
+          loadMoreInProgress = false;
           document.getElementById("loadingIndicator").style.display = "none";
           searchBtn.disabled = false;
           searchBtn.textContent = "Tìm kiếm";
+        }
+      }
+
+      async function loadMoreBooks() {
+        if (loadMoreInProgress || searchInProgress) {
+          return;
+        }
+
+        if (currentPage >= totalPagesAvailable) {
+          alert("Đã tải hết tất cả các trang!");
+          return;
+        }
+
+        loadMoreInProgress = true;
+        await searchBooks(false);
+      }
+
+      function appendBooksToGrid(newBooks, startIndex) {
+        const booksGrid = document.querySelector(".books-grid");
+        if (!booksGrid) return;
+
+        let html = "";
+        newBooks.forEach((book, idx) => {
+          const index = startIndex + idx;
+          const bookId = `book-${index}`;
+          html += `
+            <div class="book-card" id="${bookId}">
+              <input 
+                type="checkbox" 
+                class="book-checkbox" 
+                data-book-index="${index}"
+                onchange="toggleBookSelection(${index}, this.checked)"
+              >
+              <div class="book-title">${index + 1}. ${escapeHtml(book.title)}</div>
+              <div class="book-authors">${escapeHtml(book.authors.join(", ") || "Không rõ")}</div>
+              
+              <div class="book-details">
+                <div class="detail-item">
+                  <div class="detail-label">NXB</div>
+                  <div class="detail-value">${escapeHtml(book.publisher)}</div>
+                </div>
+                <div class="detail-item">
+                  <div class="detail-label">Năm</div>
+                  <div class="detail-value">${escapeHtml(book.year)}</div>
+                </div>
+                <div class="detail-item">
+                  <div class="detail-label">Số trang</div>
+                  <div class="detail-value">${escapeHtml(book.pages)}</div>
+                </div>
+                <div class="detail-item">
+                  <div class="detail-label">Ngôn ngữ</div>
+                  <div class="detail-value">${escapeHtml(book.language)}</div>
+                </div>
+                <div class="detail-item">
+                  <div class="detail-label">Định dạng</div>
+                  <div class="detail-value">${escapeHtml(book.file)}</div>
+                </div>
+              </div>
+              
+              ${
+                book.link !== "N/A"
+                  ? `<a href="${escapeHtml(book.link)}" target="_blank" class="book-link" rel="noopener noreferrer">Xem sách →</a>`
+                  : '<span style="color: #999; font-size: 0.85em;">Không có liên kết</span>'
+              }
+            </div>
+          `;
+        });
+
+        booksGrid.insertAdjacentHTML("beforeend", html);
+
+        // Update load more button
+        updateLoadMoreButton();
+      }
+
+      function updateResultCount() {
+        const resultHeader = document.querySelector("#resultCountHeader");
+        if (resultHeader) {
+          resultHeader.textContent = `Kết quả (${currentResults.books.length} sách đã tải / ${totalBooksCount} tổng cộng)`;
+        }
+      }
+
+      function updateStatsBar(data) {
+        const statsBar = document.querySelector(".stats-bar");
+        if (statsBar) {
+          statsBar.innerHTML = `
+            <div class="stat-item">
+              <div class="stat-label">Tổng số sách</div>
+              <div class="stat-value">${totalBooksCount}</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-label">Từ khóa</div>
+              <div class="stat-value" style="font-size: 1.5em;">"${escapeHtml(data.query)}"</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-label">Trang hiện tại</div>
+              <div class="stat-value" style="font-size: 1.5em;">${currentPage} / ${totalPagesAvailable}</div>
+            </div>
+          `;
+        }
+      }
+
+      function updateLoadMoreButton() {
+        const loadMoreContainer = document.getElementById("loadMoreContainer");
+        if (loadMoreContainer) {
+          if (currentPage >= totalPagesAvailable) {
+            loadMoreContainer.innerHTML = `
+              <button class="btn btn-secondary load-more-btn" disabled>
+                ✅ Đã tải hết ${totalPagesAvailable} trang (${currentResults.books.length} sách)
+              </button>
+            `;
+          } else {
+            loadMoreContainer.innerHTML = `
+              <button class="btn btn-secondary load-more-btn" onclick="loadMoreBooks()">
+                📄 Tải thêm trang ${currentPage + 1} / ${totalPagesAvailable} (mỗi trang 50 sách)
+              </button>
+            `;
+          }
         }
       }
 
@@ -556,15 +722,23 @@
           return;
         }
 
+        currentPage = data.current_page || 1;
+        totalPagesAvailable = data.total_pages || 1;
+        totalBooksCount = data.total_books_count || data.books.length;
+
         let html = `
           <div class="stats-bar">
             <div class="stat-item">
               <div class="stat-label">Tổng số sách</div>
-              <div class="stat-value">${data.total_count}</div>
+              <div class="stat-value">${totalBooksCount}</div>
             </div>
             <div class="stat-item">
               <div class="stat-label">Từ khóa</div>
               <div class="stat-value" style="font-size: 1.5em;">"${escapeHtml(data.query)}"</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-label">Trang hiện tại</div>
+              <div class="stat-value" style="font-size: 1.5em;">${currentPage} / ${totalPagesAvailable}</div>
             </div>
           </div>
           
@@ -587,7 +761,7 @@
             <div class="selection-controls">
               <label>
                 <input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this.checked)">
-                Chọn tất cả
+                Chọn tất cả sách đã tải
               </label>
               <button class="btn btn-secondary" style="padding: 6px 16px; font-size: 12px;" onclick="clearSelection()">
                 Bỏ chọn
@@ -598,8 +772,8 @@
             </div>
           </div>
           
-          <h3 style="font-weight: 400; margin: 24px 0 16px 0; text-transform: uppercase; font-size: 0.9em; letter-spacing: 0.5px;">
-            Kết quả (${data.books.length} sách)
+          <h3 id="resultCountHeader" style="font-weight: 400; margin: 24px 0 16px 0; text-transform: uppercase; font-size: 0.9em; letter-spacing: 0.5px;">
+            Kết quả (${data.books.length} sách đã tải / ${totalBooksCount} tổng cộng)
           </h3>
           <div class="books-grid">
         `;
@@ -651,6 +825,26 @@
 
         html += "</div>";
 
+        // Add load more button
+        html += `<div id="loadMoreContainer" class="load-more-container">`;
+
+        if (currentPage < totalPagesAvailable) {
+          html += `
+            <button class="btn btn-secondary load-more-btn" onclick="loadMoreBooks()">
+              📄 Tải thêm trang ${currentPage + 1} / ${totalPagesAvailable} (mỗi trang 50 sách)
+            </button>
+          `;
+        } else {
+          html += `
+            <button class="btn btn-secondary load-more-btn" disabled>
+              ✅ Đã tải hết ${totalPagesAvailable} trang (${data.books.length} sách)
+            </button>
+          `;
+        }
+
+        html += `</div>`;
+
+        // Add statistics if available
         if (data.statistics && Object.keys(data.statistics).length > 0) {
           html += '<div class="stats-detail">';
           html += "<h3>Thống kê</h3>";
@@ -663,9 +857,7 @@
               .sort((a, b) => b[1] - a[1])
               .slice(0, 5)
               .map(([lang, count]) => {
-                const percentage = ((count / data.total_count) * 100).toFixed(
-                  1,
-                );
+                const percentage = ((count / totalBooksCount) * 100).toFixed(1);
                 return `<div style="margin-bottom: 4px;">${escapeHtml(lang)}: ${count} (${percentage}%)</div>`;
               })
               .join("");
@@ -683,9 +875,7 @@
               .sort((a, b) => b[1] - a[1])
               .slice(0, 5)
               .map(([fmt, count]) => {
-                const percentage = ((count / data.total_count) * 100).toFixed(
-                  1,
-                );
+                const percentage = ((count / totalBooksCount) * 100).toFixed(1);
                 return `<div style="margin-bottom: 4px;">${escapeHtml(fmt)}: ${count} (${percentage}%)</div>`;
               })
               .join("");
@@ -728,10 +918,12 @@
       function toggleBookSelection(index, checked) {
         if (checked) {
           selectedBooks.add(index);
-          document.getElementById(`book-${index}`).classList.add("selected");
+          const card = document.getElementById(`book-${index}`);
+          if (card) card.classList.add("selected");
         } else {
           selectedBooks.delete(index);
-          document.getElementById(`book-${index}`).classList.remove("selected");
+          const card = document.getElementById(`book-${index}`);
+          if (card) card.classList.remove("selected");
         }
         updateSelectionInfo();
         updateSelectAllCheckbox();
@@ -770,14 +962,17 @@
         document
           .querySelectorAll(".book-checkbox")
           .forEach((cb) => (cb.checked = false));
-        document.getElementById("selectAllCheckbox").checked = false;
+        const selectAllCheckbox = document.getElementById("selectAllCheckbox");
+        if (selectAllCheckbox) selectAllCheckbox.checked = false;
         updateSelectionInfo();
       }
 
       function updateSelectionInfo() {
         const count = selectedBooks.size;
-        document.getElementById("selectionInfo").textContent =
-          `Đã chọn ${count} sách`;
+        const infoElement = document.getElementById("selectionInfo");
+        if (infoElement) {
+          infoElement.textContent = `Đã chọn ${count} / ${currentResults?.books.length || 0} sách`;
+        }
       }
 
       function updateSelectAllCheckbox() {
@@ -785,7 +980,8 @@
         const selectAll = document.getElementById("selectAllCheckbox");
         if (selectAll) {
           selectAll.checked =
-            selectedBooks.size === currentResults.books.length;
+            selectedBooks.size === currentResults.books.length &&
+            currentResults.books.length > 0;
         }
       }
 
@@ -917,18 +1113,19 @@
         let summary = `KẾT QUẢ TÌM KIẾM Z-LIBRARY\n`;
         summary += `========================\n`;
         summary += `Từ khóa: ${currentResults.query}\n`;
-        summary += `Tổng số sách: ${currentResults.total_count}\n`;
+        summary += `Tổng số sách: ${totalBooksCount}\n`;
+        summary += `Đã tải: ${currentResults.books.length} sách\n`;
         summary += `========================\n\n`;
 
-        currentResults.books.slice(0, 10).forEach((book, index) => {
+        currentResults.books.slice(0, 20).forEach((book, index) => {
           summary += `${index + 1}. ${book.title}\n`;
           summary += `   Tác giả: ${book.authors.join(", ")}\n`;
           summary += `   Năm: ${book.year} | Ngôn ngữ: ${book.language} | Định dạng: ${book.file}\n`;
           summary += `   Link: ${book.link}\n\n`;
         });
 
-        if (currentResults.books.length > 10) {
-          summary += `... và ${currentResults.books.length - 10} sách khác\n`;
+        if (currentResults.books.length > 20) {
+          summary += `... và ${currentResults.books.length - 20} sách khác\n`;
         }
 
         navigator.clipboard
@@ -953,7 +1150,7 @@
         .getElementById("query")
         .addEventListener("keypress", function (e) {
           if (e.key === "Enter") {
-            searchBooks();
+            searchBooks(true);
           }
         });
 

@@ -330,6 +330,26 @@ class ZLibraryScraperModel:
         except:
             return 1
     
+    def get_total_books_count(self, page: Page) -> int:
+        """Get total number of books found"""
+        try:
+            content = page.content()
+            match = re.search(r'booksTotal:\s*(\d+)', content)
+            if match:
+                return int(match.group(1))
+            
+            # Try alternative selectors
+            result_count = page.query_selector('.totalCount, .search-result-count')
+            if result_count:
+                text = result_count.text_content()
+                numbers = re.findall(r'\d+', text)
+                if numbers:
+                    return int(numbers[0])
+            
+            return 0
+        except:
+            return 0
+    
     def calculate_statistics(self, books: List[Book]) -> Dict:
         """Calculate statistics from books data"""
         if not books:
@@ -360,10 +380,16 @@ class ZLibraryScraperModel:
         
         return stats
     
-    def search_books(self, query: str, max_pages: Optional[int] = None, headless: bool = True) -> List[Book]:
-        """Search Z-Library for books matching query"""
+    def search_books(self, query: str, page_num: int = 1, max_pages: Optional[int] = None, headless: bool = True) -> Tuple[List[Book], int, int]:
+        """Search Z-Library for books matching query
+        
+        Returns:
+            Tuple of (books_list, total_pages_available, total_books_count)
+        """
         all_books = []
         encoded_query = query.replace(' ', '%20')
+        total_pages_available = 1
+        total_books_count = 0
         
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=headless)
@@ -376,38 +402,32 @@ class ZLibraryScraperModel:
             page = self._login(context)
             
             try:
-                # Get first page
-                first_page_url = f"{self.BASE_URL}/s/{encoded_query}?view=table"
-                print(f"Accessing: {first_page_url}")
-                page.goto(first_page_url, timeout=60000)
+                # Construct URL for specific page
+                page_url = f"{self.BASE_URL}/s/{encoded_query}?view=table"
+                if page_num > 1:
+                    page_url += f"&page={page_num}"
+                
+                print(f"Accessing: {page_url}")
+                page.goto(page_url, timeout=60000)
                 page.wait_for_load_state("networkidle")
                 time.sleep(2)
                 
-                # Determine total pages
-                total_pages = self.get_total_pages(page)
-                if max_pages:
-                    total_pages = min(total_pages, max_pages)
+                # Get total pages available and total books count
+                total_pages_available = self.get_total_pages(page)
+                total_books_count = self.get_total_books_count(page)
+                print(f"Total pages available: {total_pages_available}")
+                print(f"Total books found: {total_books_count}")
                 
-                print(f"\nTotal pages to scrape: {total_pages}")
+                # Extract books from current page
+                try:
+                    page.wait_for_selector('table.table_book tbody tr', timeout=10000)
+                except:
+                    print(f"No table found on page {page_num}")
+                    return [], total_pages_available, total_books_count
                 
-                # Extract books from all pages
-                for current_page in range(1, total_pages + 1):
-                    if current_page > 1:
-                        page_url = f"{self.BASE_URL}/s/{encoded_query}?view=table&page={current_page}"
-                        print(f"\nAccessing page {current_page}: {page_url}")
-                        page.goto(page_url, timeout=60000)
-                        page.wait_for_load_state("networkidle")
-                        time.sleep(1)
-                    
-                    try:
-                        page.wait_for_selector('table.table_book tbody tr', timeout=10000)
-                    except:
-                        print(f"No table found on page {current_page}")
-                        continue
-                    
-                    books = self.extract_books_from_table(page)
-                    print(f"Found {len(books)} books on page {current_page}")
-                    all_books.extend(books)
+                books = self.extract_books_from_table(page)
+                print(f"Found {len(books)} books on page {page_num}")
+                all_books.extend(books)
                 
             except Exception as e:
                 print(f"Error occurred: {e}")
@@ -418,8 +438,8 @@ class ZLibraryScraperModel:
         
         self.books = all_books
         self.statistics = self.calculate_statistics(all_books)
-        print(f"\nTotal books found: {len(all_books)}")
-        return all_books
+        print(f"\nBooks found on page {page_num}: {len(all_books)}")
+        return all_books, total_pages_available, total_books_count
     
     def download_books(self, books: List[Dict], max_books: Optional[int] = None, headless: bool = True) -> bytes:
         """Download actual book files and zip them together"""

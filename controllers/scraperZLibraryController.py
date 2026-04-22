@@ -24,7 +24,7 @@ class ScraperController:
             return jsonify({'success': False, 'error': 'Invalid request data'}), 400
         
         query = data.get('query', '').strip()
-        max_pages = data.get('max_pages')
+        page = data.get('page', 1)  # Get page parameter
         headless = data.get('headless', True)
         
         if not query:
@@ -34,14 +34,21 @@ class ScraperController:
             return jsonify({'success': False, 'error': 'Search query must be at least 2 characters long'}), 400
         
         try:
-            books = cls._model.search_books(query, max_pages, headless)
+            # Get books for specific page
+            books, total_pages, total_books = cls._model.search_books(query, page, None, headless)
+            
+            # Calculate statistics for current page books
+            statistics = cls._model.statistics
             
             result = {
                 'success': True,
                 'query': query,
                 'books': [book.to_dict() for book in books],
-                'statistics': cls._model.statistics,
-                'total_count': len(books)
+                'statistics': statistics,
+                'total_count': len(books),  # Count for current page
+                'current_page': page,
+                'total_pages': total_pages,
+                'total_books_count': total_books  # Total books across all pages
             }
             return jsonify(result)
             
@@ -138,7 +145,8 @@ class ScraperController:
         lines.append("Z-Library Search Results")
         lines.append("=" * 80)
         lines.append(f"Search Query: {results['query']}")
-        lines.append(f"Total Books Found: {results['total_count']}")
+        lines.append(f"Total Books Found: {results.get('total_books_count', results['total_count'])}")
+        lines.append(f"Books in this export: {results['total_count']}")
         lines.append(f"Date: {cls._get_current_time()}")
         lines.append("=" * 80)
         lines.append("")
@@ -175,7 +183,7 @@ class ScraperController:
             lines.append("=" * 80)
             lines.append("SUMMARY STATISTICS")
             lines.append("=" * 80)
-            lines.append(f"Total Books: {stats.get('total_books', 0)}")
+            lines.append(f"Total Books in export: {stats.get('total_books', 0)}")
             
             if stats.get('languages'):
                 lines.append("\nLanguages Distribution:")
