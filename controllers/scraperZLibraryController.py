@@ -46,6 +46,8 @@ class ScraperController:
             return jsonify(result)
             
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return jsonify({
                 'success': False,
                 'error': str(e),
@@ -88,57 +90,6 @@ class ScraperController:
         )
     
     @classmethod
-    def _format_results_as_text(cls, results: Dict) -> str:
-        """Format results as plain text for download"""
-        if not results.get('success'):
-            return f"Error: {results.get('error', 'Unknown error')}"
-        
-        lines = []
-        lines.append("=" * 80)
-        lines.append("Z-Library Search Results")
-        lines.append("=" * 80)
-        lines.append(f"Search Query: {results['query']}")
-        lines.append(f"Total Books Found: {results['total_count']}")
-        lines.append("=" * 80)
-        lines.append("")
-        
-        for idx, book_data in enumerate(results['books'], 1):
-            lines.append(f"Book #{idx}")
-            lines.append("-" * 60)
-            lines.append(f"Title: {book_data['title']}")
-            lines.append(f"Author(s): {', '.join(book_data['authors']) if book_data['authors'] else 'N/A'}")
-            lines.append(f"Publisher: {book_data['publisher']}")
-            lines.append(f"Year: {book_data['year']}")
-            lines.append(f"Pages: {book_data['pages']}")
-            lines.append(f"Language: {book_data['language']}")
-            lines.append(f"File: {book_data['file']}")
-            lines.append(f"Link: {book_data['link']}")
-            lines.append("=" * 80)
-            lines.append("")
-        
-        if results.get('statistics'):
-            stats = results['statistics']
-            lines.append("")
-            lines.append("=" * 80)
-            lines.append("SUMMARY STATISTICS")
-            lines.append("=" * 80)
-            
-            if stats.get('languages'):
-                lines.append("\nLanguages Distribution:")
-                for lang, count in sorted(stats['languages'].items(), key=lambda x: x[1], reverse=True):
-                    percentage = (count / results['total_count']) * 100
-                    lines.append(f"  {lang}: {count} books ({percentage:.1f}%)")
-            
-            if stats.get('formats'):
-                lines.append("\nFile Formats Distribution:")
-                for fmt, count in sorted(stats['formats'].items(), key=lambda x: x[1], reverse=True):
-                    lines.append(f"  {fmt}: {count} books")
-        
-        return "\n".join(lines)
-    
-    # Add this method to ScraperController class in controllers/scraperZLibraryController.py
-
-    @classmethod
     def download_books_zip(cls):
         """Download actual book files as a zip archive"""
         data = request.get_json()
@@ -154,15 +105,100 @@ class ScraperController:
             return jsonify({'error': 'No books provided'}), 400
         
         try:
+            print(f"\n📚 Controller: Starting download of {len(books)} books...")
+            
             zip_content = cls._model.download_books(books, max_books, headless)
+            
+            query = data.get('query', 'download')
+            safe_query = query.replace(' ', '_')[:50]
             
             return Response(
                 zip_content,
                 mimetype='application/zip',
                 headers={
-                    'Content-Disposition': f'attachment;filename=zlib_books_{data.get("query", "download")}.zip'
+                    'Content-Disposition': f'attachment;filename=zlib_books_{safe_query}.zip',
+                    'Content-Type': 'application/zip'
                 }
             )
             
         except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"❌ Controller error: {e}")
             return jsonify({'error': str(e)}), 500
+    
+    @classmethod
+    def _format_results_as_text(cls, results: Dict) -> str:
+        """Format results as plain text for download"""
+        if not results.get('success'):
+            return f"Error: {results.get('error', 'Unknown error')}"
+        
+        lines = []
+        lines.append("=" * 80)
+        lines.append("Z-Library Search Results")
+        lines.append("=" * 80)
+        lines.append(f"Search Query: {results['query']}")
+        lines.append(f"Total Books Found: {results['total_count']}")
+        lines.append(f"Date: {cls._get_current_time()}")
+        lines.append("=" * 80)
+        lines.append("")
+        
+        for idx, book_data in enumerate(results['books'], 1):
+            lines.append(f"Book #{idx}")
+            lines.append("-" * 60)
+            lines.append(f"Title: {book_data['title']}")
+            
+            authors = book_data.get('authors', [])
+            authors_str = ', '.join(authors) if authors else 'N/A'
+            lines.append(f"Author(s): {authors_str}")
+            
+            lines.append(f"Publisher: {book_data.get('publisher', 'N/A')}")
+            lines.append(f"Year: {book_data.get('year', 'N/A')}")
+            lines.append(f"Pages: {book_data.get('pages', 'N/A')}")
+            lines.append(f"Language: {book_data.get('language', 'N/A')}")
+            lines.append(f"File: {book_data.get('file', 'N/A')}")
+            lines.append(f"Link: {book_data.get('link', 'N/A')}")
+            
+            if book_data.get('download_url') and book_data['download_url'] != 'N/A':
+                lines.append(f"Download URL: {book_data['download_url']}")
+            
+            if book_data.get('file_size') and book_data['file_size'] != 'N/A':
+                lines.append(f"File Size: {book_data['file_size']}")
+            
+            lines.append("=" * 80)
+            lines.append("")
+        
+        # Add statistics
+        if results.get('statistics'):
+            stats = results['statistics']
+            lines.append("")
+            lines.append("=" * 80)
+            lines.append("SUMMARY STATISTICS")
+            lines.append("=" * 80)
+            lines.append(f"Total Books: {stats.get('total_books', 0)}")
+            
+            if stats.get('languages'):
+                lines.append("\nLanguages Distribution:")
+                for lang, count in sorted(stats['languages'].items(), key=lambda x: x[1], reverse=True):
+                    percentage = (count / results['total_count']) * 100 if results['total_count'] > 0 else 0
+                    lines.append(f"  {lang}: {count} books ({percentage:.1f}%)")
+            
+            if stats.get('formats'):
+                lines.append("\nFile Formats Distribution:")
+                for fmt, count in sorted(stats['formats'].items(), key=lambda x: x[1], reverse=True):
+                    percentage = (count / results['total_count']) * 100 if results['total_count'] > 0 else 0
+                    lines.append(f"  {fmt}: {count} books ({percentage:.1f}%)")
+            
+            if stats.get('years'):
+                lines.append("\nPublication Years (Top 10):")
+                sorted_years = sorted(stats['years'].items(), key=lambda x: x[1], reverse=True)[:10]
+                for year, count in sorted_years:
+                    lines.append(f"  {year}: {count} books")
+        
+        return "\n".join(lines)
+    
+    @staticmethod
+    def _get_current_time() -> str:
+        """Get current formatted time"""
+        from datetime import datetime
+        return datetime.now().strftime('%Y-%m-%d %H:%M:%S')

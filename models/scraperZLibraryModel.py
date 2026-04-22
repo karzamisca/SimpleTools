@@ -1,15 +1,12 @@
 # models/scraperZLibraryModel.py
-import os
 import re
 import time
 import io
 import zipfile
+import os
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 from playwright.sync_api import sync_playwright, Page, BrowserContext
-from dotenv import load_dotenv
-
-load_dotenv()
 
 
 @dataclass
@@ -155,7 +152,6 @@ class ZLibraryScraperModel:
         file_size = 'N/A'
         
         try:
-            # Look for download button - class="btn btn-default addDownloadedBook"
             download_btn = page.query_selector('a.addDownloadedBook')
             if not download_btn:
                 download_btn = page.query_selector('a[class*="addDownloadedBook"]')
@@ -168,15 +164,12 @@ class ZLibraryScraperModel:
                     download_url = f"{self.BASE_URL}{href}" if not href.startswith('http') else href
                     print(f"    Found download URL: {download_url}")
                 
-                # Extract file size from the button text
                 full_text = download_btn.text_content().strip()
-                # Pattern: "epub, 2.98 MB" or similar
                 size_match = re.search(r'(\d+\.?\d*\s*(MB|KB|GB|B))', full_text, re.IGNORECASE)
                 if size_match:
                     file_size = size_match.group(1)
                     print(f"    File size: {file_size}")
                 
-                # Also extract file extension if available
                 extension_span = download_btn.query_selector('.book-property__extension')
                 if extension_span:
                     extension = extension_span.text_content().strip()
@@ -194,7 +187,6 @@ class ZLibraryScraperModel:
         try:
             print("    Looking for download button...")
             
-            # Find the download button on the book page
             download_btn = page.query_selector('a.addDownloadedBook')
             if not download_btn:
                 download_btn = page.query_selector('a[class*="addDownloadedBook"]')
@@ -204,32 +196,56 @@ class ZLibraryScraperModel:
                 download_btn = page.query_selector('a[href*="/dl/"]')
             
             if download_btn:
-                print("    ✓ Found download button, clicking...")
+                print("    ✓ Found download button")
                 
-                # Set up download handler before clicking
-                with page.expect_download(timeout=60000) as download_info:
-                    download_btn.click()
+                href = download_btn.get_attribute('href')
+                if href:
+                    full_url = f"{self.BASE_URL}{href}" if not href.startswith('http') else href
+                    print(f"    Download URL: {full_url}")
+                    
+                    try:
+                        with page.expect_download(timeout=30000) as download_info:
+                            page.goto(full_url, timeout=30000)
+                        
+                        download = download_info.value
+                        print(f"    Download started: {download.suggested_filename}")
+                        
+                        time.sleep(2)
+                        file_content = download.read_bytes()
+                        print(f"    ✓ Downloaded {len(file_content)} bytes")
+                        return file_content
+                        
+                    except Exception as e1:
+                        print(f"    Method 1 failed: {e1}")
+                        
+                        try:
+                            print("    Trying Method 2: Click button...")
+                            with page.expect_download(timeout=30000) as download_info:
+                                download_btn.click()
+                            
+                            download = download_info.value
+                            time.sleep(2)
+                            file_content = download.read_bytes()
+                            print(f"    ✓ Downloaded {len(file_content)} bytes via click")
+                            return file_content
+                            
+                        except Exception as e2:
+                            print(f"    Method 2 failed: {e2}")
+                            
+                            try:
+                                print("    Trying Method 3: Check temp file...")
+                                download = download_info.value
+                                temp_path = download.path()
+                                if temp_path and os.path.exists(temp_path):
+                                    time.sleep(1)
+                                    with open(temp_path, 'rb') as f:
+                                        file_content = f.read()
+                                    print(f"    ✓ Read {len(file_content)} bytes from temp file")
+                                    return file_content
+                            except Exception as e3:
+                                print(f"    Method 3 failed: {e3}")
                 
-                download = download_info.value
-                suggested_filename = download.suggested_filename
-                print(f"    Download started: {suggested_filename}")
-                
-                # CRITICAL: Save the file to a temporary location first, then read it
-                # This ensures the download completes fully
-                temp_path = download.path()
-                if temp_path:
-                    print(f"    Download saved to: {temp_path}")
-                    # Wait a moment for download to complete
-                    time.sleep(1)
-                    with open(temp_path, 'rb') as f:
-                        file_content = f.read()
-                    print(f"    ✓ Read {len(file_content)} bytes from temp file")
-                    return file_content
-                else:
-                    # Fallback: try reading directly from download object
-                    file_content = download.read_bytes()
-                    print(f"    ✓ Downloaded {len(file_content)} bytes directly")
-                    return file_content
+                return None
             else:
                 print("    ✗ Download button not found on page")
                 return None
@@ -247,11 +263,9 @@ class ZLibraryScraperModel:
         
         for row in book_rows:
             try:
-                # Extract author(s)
                 authors = row.query_selector_all('.authors a')
                 author_list = [author.text_content().strip() for author in authors]
                 
-                # Extract title and link
                 title_element = row.query_selector('td:nth-child(2) > a')
                 if title_element:
                     title = ' '.join(title_element.text_content().strip().split())
@@ -262,7 +276,6 @@ class ZLibraryScraperModel:
                     title = 'N/A'
                     link = 'N/A'
                 
-                # Extract other fields
                 publisher_element = row.query_selector('td:nth-child(3) a')
                 publisher = publisher_element.text_content().strip() if publisher_element else 'N/A'
                 
@@ -358,7 +371,9 @@ class ZLibraryScraperModel:
                 viewport={'width': 1280, 'height': 800},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             )
-            page = context.new_page()
+            
+            # LOGIN BEFORE SEARCHING
+            page = self._login(context)
             
             try:
                 # Get first page
@@ -407,20 +422,8 @@ class ZLibraryScraperModel:
         return all_books
     
     def download_books(self, books: List[Dict], max_books: Optional[int] = None, headless: bool = True) -> bytes:
-        """
-        Download actual book files and zip them together
-        
-        Args:
-            books: List of book dictionaries with 'link' field
-            max_books: Maximum number of books to download (None for all)
-            headless: Run browser in headless mode
-        
-        Returns:
-            Bytes of zip file containing all downloaded books
-        """
+        """Download actual book files and zip them together"""
         downloaded_files = []
-        
-        # Limit number of books if specified
         books_to_download = books[:max_books] if max_books else books
         
         print(f"\n📚 Starting download of {len(books_to_download)} books...")
@@ -430,10 +433,10 @@ class ZLibraryScraperModel:
             context = browser.new_context(
                 viewport={'width': 1280, 'height': 800},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                accept_downloads=True  # Important: Enable downloads
+                accept_downloads=True
             )
             
-            # Login first
+            # LOGIN BEFORE DOWNLOADING
             page = self._login(context)
             
             try:
@@ -446,47 +449,39 @@ class ZLibraryScraperModel:
                         continue
                     
                     try:
-                        # Go to book page
                         print(f"  Navigating to: {book_link}")
                         page.goto(book_link, timeout=30000)
                         page.wait_for_load_state("networkidle")
                         time.sleep(2)
                         
-                        # Extract download info (optional, for logging)
-                        download_url, file_size = self._extract_download_info(page)
-                        
-                        # Create safe filename
-                        safe_title = re.sub(r'[^\w\s-]', '', book_data['title'][:50])
-                        safe_title = re.sub(r'[-\s]+', '_', safe_title)
-                        if not safe_title:
-                            safe_title = f"book_{idx}"
-                        
-                        extension = book_data.get('file', 'txt').split(',')[0].strip().lower()
-                        if extension == 'N/A' or not extension:
-                            extension = 'txt'
-                        
-                        filename = f"{safe_title}.{extension}"
-                        
-                        # Download the file directly from the book page
+                        self._extract_download_info(page)
                         file_content = self._download_file(page)
                         
-                        if file_content:
+                        if file_content and len(file_content) > 0:
+                            safe_title = re.sub(r'[^\w\s-]', '', book_data['title'][:50])
+                            safe_title = re.sub(r'[-\s]+', '_', safe_title)
+                            if not safe_title:
+                                safe_title = f"book_{idx}"
+                            
+                            extension = book_data.get('file', 'txt').split(',')[0].strip().lower()
+                            if extension == 'N/A' or not extension:
+                                extension = 'txt'
+                            
+                            filename = f"{safe_title}.{extension}"
+                            
                             downloaded_files.append({
                                 'filename': filename,
                                 'content': file_content,
                                 'size': len(file_content)
                             })
-                            print(f"  ✅ Successfully downloaded: {filename} ({len(file_content)} bytes)")
+                            print(f"  ✅ Successfully added to ZIP: {filename} ({len(file_content)} bytes)")
                         else:
-                            print(f"  ❌ Failed to download file content")
+                            print(f"  ❌ No file content received")
                     
                     except Exception as e:
                         print(f"  ❌ Error processing book: {e}")
-                        import traceback
-                        traceback.print_exc()
                         continue
                     
-                    # Small delay between downloads to avoid rate limiting
                     time.sleep(2)
                 
             except Exception as e:
@@ -496,17 +491,15 @@ class ZLibraryScraperModel:
             finally:
                 browser.close()
         
-        # Create zip file in memory
         print(f"\n📦 Creating ZIP archive with {len(downloaded_files)} files...")
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             for file_info in downloaded_files:
                 zip_file.writestr(file_info['filename'], file_info['content'])
-                print(f"  Added: {file_info['filename']} ({file_info['size']} bytes)")
+                print(f"  Added to ZIP: {file_info['filename']} ({file_info['size']} bytes)")
         
         zip_buffer.seek(0)
-        
         total_size = zip_buffer.getbuffer().nbytes
-        print(f"\n✅ Created ZIP archive: {total_size} bytes")
+        print(f"\n✅ Created ZIP archive: {total_size} bytes with {len(downloaded_files)} files")
         
         return zip_buffer.getvalue()
