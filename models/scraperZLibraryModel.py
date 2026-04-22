@@ -45,7 +45,7 @@ class ZLibraryScraperModel:
     """Model handling Z-Library scraping operations"""
     
     BASE_URL = "https://z-library.sk"
-    MAX_WORKERS = 20  # Fixed number of concurrent download threads
+    MAX_WORKERS = 10  # Fixed number of concurrent download threads
     
     # Account credentials - UPDATE THESE
     LOGIN_EMAIL = os.environ.get("ZLIBRARY_EMAIL")
