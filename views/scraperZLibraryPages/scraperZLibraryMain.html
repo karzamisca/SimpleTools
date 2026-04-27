@@ -990,12 +990,10 @@
           alert("Đang tải sách, vui lòng đợi...");
           return;
         }
-
         if (!currentResults || !currentResults.books) {
           alert("Không có sách để tải");
           return;
         }
-
         if (selectedBooks.size === 0) {
           alert("Vui lòng chọn ít nhất một cuốn sách");
           return;
@@ -1006,21 +1004,21 @@
           .map((index) => currentResults.books[index]);
 
         downloadInProgress = true;
+        const headless = document.getElementById("headless").checked;
 
+        // Show progress UI
         document.getElementById("loadingIndicator").style.display = "block";
         document.getElementById("loadingMessage").textContent =
           `Đang tải ${selectedBooksList.length} sách...`;
-        document.getElementById("progressText").textContent =
-          `Đang tải ${selectedBooksList.length} sách...`;
 
-        const headless = document.getElementById("headless").checked;
+        let successCount = 0;
+        let failedCount = 0;
 
         try {
-          const response = await fetch("/scraperZLibrary/api/download/books", {
+          // POST to get the SSE stream
+          const response = await fetch("/scraperZLibrary/api/download/stream", {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               books: selectedBooksList,
               query: currentResults.query,
@@ -1028,27 +1026,70 @@
             }),
           });
 
-          if (!response.ok) {
-            throw new Error("Tải xuống thất bại");
+          if (!response.ok) throw new Error("Không thể bắt đầu tải xuống");
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n\n");
+            buffer = lines.pop(); // keep incomplete chunk
+
+            for (const chunk of lines) {
+              const line = chunk.replace(/^data:\s*/, "").trim();
+              if (!line) continue;
+
+              let event;
+              try {
+                event = JSON.parse(line);
+              } catch {
+                continue;
+              }
+
+              if (event.type === "progress") {
+                document.getElementById("loadingMessage").textContent =
+                  `[${event.index}/${event.total}] Đang tải: ${event.title.substring(0, 50)}...`;
+                document.getElementById("progressText").textContent =
+                  `Đã xong: ${successCount} ✓  Lỗi: ${failedCount} ✗`;
+              } else if (event.type === "ready") {
+                successCount++;
+                document.getElementById("progressText").textContent =
+                  `Đã xong: ${successCount} ✓  Lỗi: ${failedCount} ✗`;
+
+                // Trigger instant download via hidden <a>
+                const a = document.createElement("a");
+                a.href = `/scraperZLibrary/api/download/file/${event.token}`;
+                a.download = event.filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+
+                // Small gap so the browser doesn't block rapid-fire downloads
+                await new Promise((r) => setTimeout(r, 600));
+              } else if (event.type === "error") {
+                failedCount++;
+                console.warn(`Failed: ${event.title} — ${event.message}`);
+                document.getElementById("progressText").textContent =
+                  `Đã xong: ${successCount} ✓  Lỗi: ${failedCount} ✗`;
+              } else if (event.type === "done") {
+                document.getElementById("loadingMessage").textContent =
+                  `Hoàn tất! ${event.success} thành công, ${event.failed} thất bại`;
+              }
+            }
           }
-
-          const blob = await response.blob();
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = `zlib_sach_${currentResults.query.replace(/\s+/g, "_")}.zip`;
-          document.body.appendChild(a);
-          a.click();
-          window.URL.revokeObjectURL(url);
-          document.body.removeChild(a);
-
-          alert(`Đã tải thành công ${selectedBooksList.length} sách!`);
         } catch (error) {
-          console.error("Download error:", error);
+          console.error("Stream download error:", error);
           alert("Không thể tải sách: " + error.message);
         } finally {
           downloadInProgress = false;
-          document.getElementById("loadingIndicator").style.display = "none";
+          setTimeout(() => {
+            document.getElementById("loadingIndicator").style.display = "none";
+          }, 2000);
         }
       }
 

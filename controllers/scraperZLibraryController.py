@@ -1,7 +1,11 @@
 # controllers/scraperZLibraryController.py
 import io
 import json
+import queue
 import re
+import threading
+import time
+import uuid
 import zipfile
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -11,12 +15,50 @@ from playwright.sync_api import sync_playwright
 
 from models.scraperZLibraryModel import ZLibraryScraperModel
 
+# ---------------------------------------------------------------------------
+# Temp file store: token -> {filename, content, size, expires}
+# Each downloaded file is parked here for 5 minutes so the frontend can
+# fetch it with a simple GET.  Expired entries are evicted lazily.
+# ---------------------------------------------------------------------------
+_file_store: Dict[str, Dict] = {}
+_file_store_lock = threading.Lock()
+
+
+def _store_file(filename: str, content: bytes) -> str:
+    """Save file bytes under a short-lived token; return the token."""
+    token = uuid.uuid4().hex
+    with _file_store_lock:
+        _file_store[token] = {
+            'filename': filename,
+            'content': content,
+            'size': len(content),
+            'expires': time.time() + 300,   # 5 minutes
+        }
+    return token
+
+
+def _pop_file(token: str) -> Optional[Dict]:
+    """Retrieve and delete a stored file by token. Returns None if expired."""
+    with _file_store_lock:
+        entry = _file_store.pop(token, None)
+    if entry and time.time() > entry['expires']:
+        return None
+    return entry
+
+
+def _evict_expired():
+    """Remove any entries that have passed their TTL."""
+    now = time.time()
+    with _file_store_lock:
+        for k in [k for k, v in _file_store.items() if now > v['expires']]:
+            del _file_store[k]
+
 
 class ScraperController:
     """
     Controller owns all business logic:
       - orchestrating login + scraping + download flows
-      - streaming individual files directly to the client (no ZIP)
+      - streaming individual files directly to the client via SSE + token fetch
       - computing statistics
       - formatting responses
     The model is only called for browser/scraping primitives.
@@ -100,71 +142,138 @@ class ScraperController:
         )
 
     @classmethod
-    def download_books(cls):
+    def download_books_stream(cls):
         """
-        Download books and stream each file individually to the client.
+        SSE endpoint. Opens one browser session, iterates through the requested
+        books, and for each book:
+          1. Downloads the file in the background thread.
+          2. Parks the bytes in _file_store under a one-time token.
+          3. Emits a 'ready' SSE event with the token.
+          4. The frontend immediately triggers a GET /api/download/file/<token>
+             which streams the file to the user with its native MIME type.
 
-        Because browsers can only receive one file per HTTP response, this
-        endpoint returns a JSON manifest of results. The frontend should call
-        /api/download/book/<idx> for each book, or we return a ZIP as a
-        fallback for multi-book requests.
-
-        For a single book: stream the file directly.
-        For multiple books: still ZIP (browser limitation), but the root cause
-        fix (expect_download order) means files are now actually captured.
+        Events emitted (newline-delimited JSON after 'data: '):
+          {"type": "progress", "index": i, "total": n, "title": "..."}
+          {"type": "ready",    "index": i, "total": n, "title": "...",
+                               "token": "<hex>", "filename": "book.pdf"}
+          {"type": "error",    "index": i, "total": n, "title": "...", "message": "..."}
+          {"type": "done",     "total": n, "success": k, "failed": m}
         """
         data = request.get_json()
         if not data:
             return jsonify({'error': 'No data provided'}), 400
 
         books = data.get('books', [])
-        max_books = data.get('max_books')
         headless = data.get('headless', True)
 
         if not books:
             return jsonify({'error': 'No books provided'}), 400
 
-        try:
-            books_to_fetch = books[:max_books] if max_books else books
-            print(f"\n📚 Controller: Starting download of {len(books_to_fetch)} books...")
-            downloaded_files = cls._run_download(books_to_fetch, headless)
+        q: queue.Queue = queue.Queue()
 
-            if not downloaded_files:
-                return jsonify({'error': 'No files could be downloaded'}), 500
+        def _worker():
+            with sync_playwright() as p:
+                context = cls._model.create_context(p, headless)
+                try:
+                    page, ok = cls._model.login(context)
+                    if not ok:
+                        print("⚠ Proceeding without confirmed login — downloads may fail")
 
-            # Single book → stream directly with its native mimetype
-            if len(downloaded_files) == 1:
-                f = downloaded_files[0]
-                mimetype = _mimetype_for(f['filename'])
-                print(f"📤 Streaming single file: {f['filename']} ({f['size']:,} bytes)")
-                return Response(
-                    f['content'],
-                    mimetype=mimetype,
-                    headers={
-                        'Content-Disposition': f'attachment;filename="{f["filename"]}"',
-                        'Content-Length': str(f['size']),
-                    },
-                )
+                    success = failed = 0
 
-            # Multiple books → ZIP (only viable option in a single HTTP response)
-            print(f"📦 Multiple files ({len(downloaded_files)}), returning ZIP...")
-            safe_query = re.sub(r'[^\w]', '_', data.get('query', 'download'))[:50]
-            zip_bytes = cls._build_zip(downloaded_files)
-            return Response(
-                zip_bytes,
-                mimetype='application/zip',
-                headers={
-                    'Content-Disposition': f'attachment;filename=zlib_books_{safe_query}.zip',
-                    'Content-Length': str(len(zip_bytes)),
-                },
-            )
+                    for idx, book_data in enumerate(books, 1):
+                        title = book_data.get('title', f'Book {idx}')
+                        q.put({'type': 'progress', 'index': idx,
+                               'total': len(books), 'title': title})
 
-        except Exception as e:
-            import traceback; traceback.print_exc()
-            print(f"❌ Controller error: {e}")
-            return jsonify({'error': str(e)}), 500
+                        book_link = book_data.get('link', 'N/A')
+                        if not book_link or book_link == 'N/A':
+                            failed += 1
+                            q.put({'type': 'error', 'index': idx, 'total': len(books),
+                                   'title': title, 'message': 'No link available'})
+                            continue
 
-    # Keep old route name as alias so existing frontend calls still work
+                        try:
+                            print(f"\n[{idx}/{len(books)}] Navigating to: {book_link}")
+                            page.goto(book_link, timeout=30000)
+                            page.wait_for_load_state('networkidle')
+
+                            download_url, _ = cls._model.extract_download_info(page)
+                            if download_url == 'N/A':
+                                raise ValueError('Could not find download URL')
+
+                            content = cls._model.download_file(page, context, download_url)
+                            if not content:
+                                raise ValueError('No file content received')
+
+                            filename = cls._build_filename(book_data, idx)
+                            token = _store_file(filename, content)
+                            success += 1
+
+                            print(f"  ✅ Ready: {filename} ({len(content):,} bytes) — token: {token}")
+                            q.put({'type': 'ready', 'index': idx, 'total': len(books),
+                                   'title': title, 'token': token, 'filename': filename})
+
+                        except Exception as e:
+                            failed += 1
+                            print(f"  ❌ Error: {e}")
+                            q.put({'type': 'error', 'index': idx, 'total': len(books),
+                                   'title': title, 'message': str(e)})
+
+                    q.put({'type': 'done', 'total': len(books),
+                           'success': success, 'failed': failed})
+
+                finally:
+                    context.close()
+                    q.put(None)   # sentinel — tells generator to stop
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+
+        def _generate():
+            while True:
+                event = q.get()
+                if event is None:
+                    break
+                yield f'data: {json.dumps(event, ensure_ascii=False)}\n\n'
+            _evict_expired()
+
+        return Response(
+            _generate(),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'X-Accel-Buffering': 'no',   # disable nginx buffering if present
+            },
+        )
+
+    @classmethod
+    def fetch_stored_file(cls, token: str):
+        """
+        GET endpoint. Pops a previously stored file by token and streams it
+        to the client with the correct MIME type. One-time use — token is
+        consumed on first access.
+        """
+        entry = _pop_file(token)
+        if not entry:
+            return jsonify({'error': 'File not found or expired'}), 404
+
+        mimetype = _mimetype_for(entry['filename'])
+        print(f"📤 Serving: {entry['filename']} ({entry['size']:,} bytes)")
+        return Response(
+            entry['content'],
+            mimetype=mimetype,
+            headers={
+                'Content-Disposition': f'attachment; filename="{entry["filename"]}"',
+                'Content-Length': str(entry['size']),
+            },
+        )
+
+    # Keep old route names as aliases so any existing calls still work
+    @classmethod
+    def download_books(cls):
+        return cls.download_books_stream()
+
     download_books_zip = download_books
 
     # ------------------------------------------------------------------
@@ -212,66 +321,6 @@ class ScraperController:
                 context.close()
 
     # ------------------------------------------------------------------
-    # Business logic — download
-    # ------------------------------------------------------------------
-
-    @classmethod
-    def _run_download(cls, books: List[Dict], headless: bool) -> List[Dict]:
-        """
-        Login once, iterate books, download each file.
-        Returns list of {filename, content, size} dicts for successful downloads.
-        """
-        downloaded_files = []
-
-        with sync_playwright() as p:
-            context = cls._model.create_context(p, headless)
-            try:
-                page, ok = cls._model.login(context)
-                if not ok:
-                    print("⚠ Proceeding without confirmed login — downloads may fail")
-
-                for idx, book_data in enumerate(books, 1):
-                    title_preview = book_data.get('title', '')[:50]
-                    print(f"\n[{idx}/{len(books)}] Processing: {title_preview}...")
-
-                    book_link = book_data.get('link', 'N/A')
-                    if not book_link or book_link == 'N/A':
-                        print("  ⚠ No link, skipping")
-                        continue
-
-                    try:
-                        print(f"  Navigating to: {book_link}")
-                        page.goto(book_link, timeout=30000)
-                        page.wait_for_load_state("networkidle")
-
-                        download_url, file_size = cls._model.extract_download_info(page)
-                        if download_url == 'N/A':
-                            print("  ✗ Could not find download URL, skipping")
-                            continue
-
-                        # download_file opens its own fresh page internally
-                        file_content = cls._model.download_file(page, context, download_url)
-                        if not file_content:
-                            print("  ❌ No file content received")
-                            continue
-
-                        filename = cls._build_filename(book_data, idx)
-                        downloaded_files.append({
-                            'filename': filename,
-                            'content': file_content,
-                            'size': len(file_content),
-                        })
-                        print(f"  ✅ Ready: {filename} ({len(file_content):,} bytes)")
-
-                    except Exception as e:
-                        print(f"  ❌ Error processing book: {e}")
-
-            finally:
-                context.close()
-
-        return downloaded_files
-
-    # ------------------------------------------------------------------
     # Business logic — helpers
     # ------------------------------------------------------------------
 
@@ -284,20 +333,6 @@ class ScraperController:
         if not extension or extension == 'n/a':
             extension = 'txt'
         return f"{safe_title}.{extension}"
-
-    @staticmethod
-    def _build_zip(files: List[Dict]) -> bytes:
-        """Pack a list of {filename, content} dicts into a ZIP and return bytes."""
-        print(f"\n📦 Creating ZIP archive with {len(files)} files...")
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for f in files:
-                zf.writestr(f['filename'], f['content'])
-                print(f"  Added: {f['filename']} ({f['size']:,} bytes)")
-        buf.seek(0)
-        total = buf.getbuffer().nbytes
-        print(f"✅ ZIP archive ready: {total:,} bytes, {len(files)} files")
-        return buf.getvalue()
 
     @staticmethod
     def _calculate_statistics(books) -> Dict:
