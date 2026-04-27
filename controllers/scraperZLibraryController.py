@@ -1,7 +1,6 @@
 # controllers/scraperZLibraryController.py
 import io
 import json
-import os
 import re
 import zipfile
 from datetime import datetime
@@ -128,41 +127,35 @@ class ScraperController:
         try:
             books_to_fetch = books[:max_books] if max_books else books
             print(f"\n📚 Controller: Starting download of {len(books_to_fetch)} books...")
-            tmp_zip_path, file_count = cls._run_download(books_to_fetch, headless)
+            downloaded_files = cls._run_download(books_to_fetch, headless)
 
-            if file_count == 0:
-                try:
-                    os.unlink(tmp_zip_path)
-                except OSError:
-                    pass
+            if not downloaded_files:
                 return jsonify({'error': 'No files could be downloaded'}), 500
 
+            # Single book → stream directly with its native mimetype
+            if len(downloaded_files) == 1:
+                f = downloaded_files[0]
+                mimetype = _mimetype_for(f['filename'])
+                print(f"📤 Streaming single file: {f['filename']} ({f['size']:,} bytes)")
+                return Response(
+                    f['content'],
+                    mimetype=mimetype,
+                    headers={
+                        'Content-Disposition': f'attachment;filename="{f["filename"]}"',
+                        'Content-Length': str(f['size']),
+                    },
+                )
+
+            # Multiple books → ZIP (only viable option in a single HTTP response)
+            print(f"📦 Multiple files ({len(downloaded_files)}), returning ZIP...")
             safe_query = re.sub(r'[^\w]', '_', data.get('query', 'download'))[:50]
-            zip_size = os.path.getsize(tmp_zip_path)
-            print(f"📤 Streaming ZIP: {zip_size:,} bytes, {file_count} files")
-
-            def _stream_and_cleanup():
-                """Generator that reads the ZIP in chunks then deletes the temp file."""
-                try:
-                    with open(tmp_zip_path, 'rb') as f:
-                        while True:
-                            chunk = f.read(1024 * 1024)  # 1 MB chunks
-                            if not chunk:
-                                break
-                            yield chunk
-                finally:
-                    try:
-                        os.unlink(tmp_zip_path)
-                        print(f"🗑 Cleaned up temp ZIP: {tmp_zip_path}")
-                    except OSError:
-                        pass
-
+            zip_bytes = cls._build_zip(downloaded_files)
             return Response(
-                _stream_and_cleanup(),
+                zip_bytes,
                 mimetype='application/zip',
                 headers={
                     'Content-Disposition': f'attachment;filename=zlib_books_{safe_query}.zip',
-                    'Content-Length': str(zip_size),
+                    'Content-Length': str(len(zip_bytes)),
                 },
             )
 
@@ -195,7 +188,7 @@ class ScraperController:
 
                 print(f"Accessing: {url}")
                 page.goto(url, timeout=60000)
-                cls._model._wait_for_idle(page)
+                page.wait_for_load_state("networkidle")
 
                 total_pages = cls._model.get_total_pages(page)
                 total_books = cls._model.get_total_books_count(page)
@@ -223,72 +216,60 @@ class ScraperController:
     # ------------------------------------------------------------------
 
     @classmethod
-    def _run_download(cls, books: List[Dict], headless: bool) -> str:
+    def _run_download(cls, books: List[Dict], headless: bool) -> List[Dict]:
         """
-        Login once, iterate books, write each file directly into a temp ZIP
-        on disk as it arrives. Returns the path to the finished ZIP file.
-
-        Memory profile: only ONE book's bytes are in RAM at a time.
-        Previously all files were held in a list, causing OOM on large runs.
+        Login once, iterate books, download each file.
+        Returns list of {filename, content, size} dicts for successful downloads.
         """
-        import tempfile
+        downloaded_files = []
 
-        # Create the ZIP file on disk up-front so we can stream into it
-        tmp_zip = tempfile.NamedTemporaryFile(
-            delete=False, suffix='.zip', prefix='zlib_download_'
-        )
-        tmp_zip_path = tmp_zip.name
-        tmp_zip.close()
+        with sync_playwright() as p:
+            context = cls._model.create_context(p, headless)
+            try:
+                page, ok = cls._model.login(context)
+                if not ok:
+                    print("⚠ Proceeding without confirmed login — downloads may fail")
 
-        file_count = 0
+                for idx, book_data in enumerate(books, 1):
+                    title_preview = book_data.get('title', '')[:50]
+                    print(f"\n[{idx}/{len(books)}] Processing: {title_preview}...")
 
-        with zipfile.ZipFile(tmp_zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-            with sync_playwright() as p:
-                context = cls._model.create_context(p, headless)
-                try:
-                    page, ok = cls._model.login(context)
-                    if not ok:
-                        print("⚠ Proceeding without confirmed login — downloads may fail")
+                    book_link = book_data.get('link', 'N/A')
+                    if not book_link or book_link == 'N/A':
+                        print("  ⚠ No link, skipping")
+                        continue
 
-                    for idx, book_data in enumerate(books, 1):
-                        title_preview = book_data.get('title', '')[:50]
-                        print(f"\n[{idx}/{len(books)}] Processing: {title_preview}...")
+                    try:
+                        print(f"  Navigating to: {book_link}")
+                        page.goto(book_link, timeout=30000)
+                        page.wait_for_load_state("networkidle")
 
-                        book_link = book_data.get('link', 'N/A')
-                        if not book_link or book_link == 'N/A':
-                            print("  ⚠ No link, skipping")
+                        download_url, file_size = cls._model.extract_download_info(page)
+                        if download_url == 'N/A':
+                            print("  ✗ Could not find download URL, skipping")
                             continue
 
-                        try:
-                            print(f"  Navigating to: {book_link}")
-                            page.goto(book_link, timeout=30000)
-                            cls._model._wait_for_idle(page)
+                        # download_file opens its own fresh page internally
+                        file_content = cls._model.download_file(page, context, download_url)
+                        if not file_content:
+                            print("  ❌ No file content received")
+                            continue
 
-                            download_url, file_size = cls._model.extract_download_info(page)
-                            if download_url == 'N/A':
-                                print("  ✗ Could not find download URL, skipping")
-                                continue
+                        filename = cls._build_filename(book_data, idx)
+                        downloaded_files.append({
+                            'filename': filename,
+                            'content': file_content,
+                            'size': len(file_content),
+                        })
+                        print(f"  ✅ Ready: {filename} ({len(file_content):,} bytes)")
 
-                            file_content = cls._model.download_file(page, context, download_url)
-                            if not file_content:
-                                print("  ❌ No file content received")
-                                continue
+                    except Exception as e:
+                        print(f"  ❌ Error processing book: {e}")
 
-                            filename = cls._build_filename(book_data, idx)
-                            # Write into ZIP immediately, then let file_content be GC'd
-                            zf.writestr(filename, file_content)
-                            file_count += 1
-                            print(f"  ✅ Added to ZIP: {filename} ({len(file_content):,} bytes)")
-                            del file_content  # release RAM immediately
+            finally:
+                context.close()
 
-                        except Exception as e:
-                            print(f"  ❌ Error processing book: {e}")
-
-                finally:
-                    context.close()
-
-        print(f"\n📦 ZIP complete: {file_count} files → {tmp_zip_path}")
-        return tmp_zip_path, file_count
+        return downloaded_files
 
     # ------------------------------------------------------------------
     # Business logic — helpers
@@ -305,9 +286,18 @@ class ScraperController:
         return f"{safe_title}.{extension}"
 
     @staticmethod
-    def _build_zip(files):
-        """Deprecated — ZIP is now built incrementally on disk in _run_download."""
-        raise NotImplementedError("Use _run_download which writes directly to disk")
+    def _build_zip(files: List[Dict]) -> bytes:
+        """Pack a list of {filename, content} dicts into a ZIP and return bytes."""
+        print(f"\n📦 Creating ZIP archive with {len(files)} files...")
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for f in files:
+                zf.writestr(f['filename'], f['content'])
+                print(f"  Added: {f['filename']} ({f['size']:,} bytes)")
+        buf.seek(0)
+        total = buf.getbuffer().nbytes
+        print(f"✅ ZIP archive ready: {total:,} bytes, {len(files)} files")
+        return buf.getvalue()
 
     @staticmethod
     def _calculate_statistics(books) -> Dict:
