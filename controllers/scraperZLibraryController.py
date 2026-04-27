@@ -5,10 +5,12 @@ import queue
 import re
 import threading
 import time
+import unicodedata
 import uuid
 import zipfile
 from datetime import datetime
 from typing import Dict, List, Optional
+from urllib.parse import quote
 
 from flask import Response, jsonify, render_template, request
 from playwright.sync_api import sync_playwright
@@ -52,6 +54,40 @@ def _evict_expired():
     with _file_store_lock:
         for k in [k for k, v in _file_store.items() if now > v['expires']]:
             del _file_store[k]
+
+
+def _content_disposition(filename: str) -> str:
+    """
+    Build a Content-Disposition header safe for all HTTP clients.
+
+    Provides both:
+      - legacy filename= with non-ASCII stripped (latin-1 safe)
+      - RFC 5987 filename*= with full UTF-8 percent-encoding
+
+    Example:
+      attachment; filename="Lap_trinh_Python.pdf"; filename*=UTF-8''L%E1%BA%ADp%20tr%C3%ACnh%20Python.pdf
+    """
+    ascii_name = filename.encode('ascii', 'ignore').decode('ascii')
+    ascii_name = ascii_name.replace('"', '_').replace('\\', '_') or 'download'
+    encoded_name = quote(filename, safe='.-_~')
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}"
+
+
+def _mimetype_for(filename: str) -> str:
+    """Return a sensible Content-Type for common ebook/document extensions."""
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+    return {
+        'pdf':  'application/pdf',
+        'epub': 'application/epub+zip',
+        'mobi': 'application/x-mobipocket-ebook',
+        'azw':  'application/vnd.amazon.ebook',
+        'azw3': 'application/vnd.amazon.ebook',
+        'fb2':  'application/x-fictionbook+xml',
+        'djvu': 'image/vnd.djvu',
+        'txt':  'text/plain',
+        'doc':  'application/msword',
+        'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    }.get(ext, 'application/octet-stream')
 
 
 class ScraperController:
@@ -149,7 +185,7 @@ class ScraperController:
           1. Downloads the file in the background thread.
           2. Parks the bytes in _file_store under a one-time token.
           3. Emits a 'ready' SSE event with the token.
-          4. The frontend immediately triggers a GET /api/download/file/<token>
+          4. The frontend immediately triggers GET /api/download/file/<token>
              which streams the file to the user with its native MIME type.
 
         Events emitted (newline-delimited JSON after 'data: '):
@@ -264,7 +300,7 @@ class ScraperController:
             entry['content'],
             mimetype=mimetype,
             headers={
-                'Content-Disposition': f'attachment; filename="{entry["filename"]}"',
+                'Content-Disposition': _content_disposition(entry['filename']),
                 'Content-Length': str(entry['size']),
             },
         )
@@ -326,8 +362,12 @@ class ScraperController:
 
     @staticmethod
     def _build_filename(book_data: Dict, idx: int) -> str:
-        """Derive a safe filename from book metadata."""
-        safe_title = re.sub(r'[^\w\s-]', '', book_data.get('title', '')[:50])
+        """Derive a safe ASCII filename from book metadata."""
+        raw_title = book_data.get('title', '')[:50]
+        # Normalize unicode → closest ASCII, then drop anything remaining non-ASCII
+        ascii_title = unicodedata.normalize('NFKD', raw_title)
+        ascii_title = ascii_title.encode('ascii', 'ignore').decode('ascii')
+        safe_title = re.sub(r'[^\w\s-]', '', ascii_title)
         safe_title = re.sub(r'[-\s]+', '_', safe_title).strip('_') or f"book_{idx}"
         extension = book_data.get('file', 'txt').split(',')[0].strip().lower()
         if not extension or extension == 'n/a':
@@ -424,24 +464,3 @@ class ScraperController:
                     lines.append(f"  {year}: {count}")
 
         return "\n".join(lines)
-
-
-# ------------------------------------------------------------------
-# Module-level helper
-# ------------------------------------------------------------------
-
-def _mimetype_for(filename: str) -> str:
-    """Return a sensible Content-Type for common ebook/document extensions."""
-    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
-    return {
-        'pdf':  'application/pdf',
-        'epub': 'application/epub+zip',
-        'mobi': 'application/x-mobipocket-ebook',
-        'azw':  'application/vnd.amazon.ebook',
-        'azw3': 'application/vnd.amazon.ebook',
-        'fb2':  'application/x-fictionbook+xml',
-        'djvu': 'image/vnd.djvu',
-        'txt':  'text/plain',
-        'doc':  'application/msword',
-        'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    }.get(ext, 'application/octet-stream')
