@@ -1009,63 +1009,34 @@
 
         document.getElementById("loadingIndicator").style.display = "block";
         document.getElementById("loadingMessage").textContent =
-          `Đang tải ${selectedBooksList.length} sách... (có thể mất vài phút)`;
+          `Đang tải ${selectedBooksList.length} sách...`;
         document.getElementById("progressText").textContent =
-          `Đang xử lý, vui lòng không đóng trang này...`;
+          `Đang tải ${selectedBooksList.length} sách...`;
 
         const headless = document.getElementById("headless").checked;
-
-        // 10-minute timeout — Playwright + Z-Library can be slow
-        const controller = new AbortController();
-        const timeoutId = setTimeout(
-          () => controller.abort(),
-          1440 * 60 * 1000,
-        );
 
         try {
           const response = await fetch("/scraperZLibrary/api/download/books", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+            },
             body: JSON.stringify({
               books: selectedBooksList,
               query: currentResults.query,
               headless: headless,
             }),
-            signal: controller.signal,
           });
 
-          clearTimeout(timeoutId);
-
           if (!response.ok) {
-            // Try to read a JSON error body
-            let errMsg = `Lỗi máy chủ (${response.status})`;
-            try {
-              const errData = await response.json();
-              errMsg = errData.error || errMsg;
-            } catch (_) {}
-            throw new Error(errMsg);
+            throw new Error("Tải xuống thất bại");
           }
 
           const blob = await response.blob();
-
-          // Detect whether the server returned JSON (error) instead of a file
-          if (blob.type.includes("application/json")) {
-            const text = await blob.text();
-            const json = JSON.parse(text);
-            throw new Error(json.error || "Máy chủ trả về lỗi không xác định");
-          }
-
           const url = window.URL.createObjectURL(blob);
           const a = document.createElement("a");
           a.href = url;
-
-          // Pick the right extension based on the Content-Disposition or blob type
-          const disposition = response.headers.get("Content-Disposition") || "";
-          const match = disposition.match(/filename="?([^"]+)"?/);
-          a.download = match
-            ? match[1]
-            : `zlib_sach_${currentResults.query.replace(/\s+/g, "_")}.zip`;
-
+          a.download = `zlib_sach_${currentResults.query.replace(/\s+/g, "_")}.zip`;
           document.body.appendChild(a);
           a.click();
           window.URL.revokeObjectURL(url);
@@ -1073,17 +1044,8 @@
 
           alert(`Đã tải thành công ${selectedBooksList.length} sách!`);
         } catch (error) {
-          clearTimeout(timeoutId);
           console.error("Download error:", error);
-
-          if (error.name === "AbortError") {
-            alert(
-              "Quá thời gian chờ (10 phút). Máy chủ vẫn đang chạy — " +
-                "hãy thử tải ít sách hơn mỗi lần.",
-            );
-          } else {
-            alert("Không thể tải sách: " + error.message);
-          }
+          alert("Không thể tải sách: " + error.message);
         } finally {
           downloadInProgress = false;
           document.getElementById("loadingIndicator").style.display = "none";
