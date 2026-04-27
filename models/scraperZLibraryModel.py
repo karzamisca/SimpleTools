@@ -1,17 +1,19 @@
 # models/scraperZLibraryModel.py
 import re
 import time
-import io
-import zipfile
 import os
+import pathlib
+import tempfile
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 from playwright.sync_api import sync_playwright, Page, BrowserContext
 
 
+PROFILE_DIR = str(pathlib.Path.home() / ".zlibrary_profile")
+
+
 @dataclass
 class Book:
-    """Book data model"""
     title: str
     authors: List[str] = field(default_factory=list)
     publisher: str = 'N/A'
@@ -22,9 +24,8 @@ class Book:
     link: str = 'N/A'
     download_url: str = 'N/A'
     file_size: str = 'N/A'
-    
+
     def to_dict(self) -> dict:
-        """Convert book to dictionary"""
         return {
             'title': self.title,
             'authors': self.authors,
@@ -40,486 +41,319 @@ class Book:
 
 
 class ZLibraryScraperModel:
-    """Model handling Z-Library scraping operations"""
-    
     BASE_URL = "https://z-library.sk"
-    
-    # Account credentials - UPDATE THESE
     LOGIN_EMAIL = os.environ.get("ZLIBRARY_EMAIL")
     LOGIN_PASSWORD = os.environ.get("ZLIBRARY_PASSWORD")
-    
-    def __init__(self):
-        self.books: List[Book] = []
-        self.statistics: Dict = {}
-        self._is_logged_in = False
-    
-    def _login(self, context: BrowserContext) -> Page:
-        """Login to Z-Library account"""
+
+    def create_context(self, playwright, headless: bool = True) -> BrowserContext:
+        return playwright.chromium.launch_persistent_context(
+            user_data_dir=PROFILE_DIR,
+            headless=headless,
+            viewport={'width': 1280, 'height': 800},
+            user_agent=(
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/120.0.0.0 Safari/537.36'
+            ),
+            accept_downloads=True,
+        )
+
+    def login(self, context: BrowserContext) -> Tuple[Page, bool]:
         page = context.new_page()
-        
         try:
             print("🔐 Attempting to login...")
-            
-            # Go to login page
             page.goto(f"{self.BASE_URL}/login", timeout=30000)
             page.wait_for_load_state("networkidle")
             time.sleep(2)
-            
-            # Check if already logged in (skip login if already authenticated)
-            current_url = page.url
-            if "/login" not in current_url:
-                print("✅ Already logged in! (Not on login page)")
-                self._is_logged_in = True
-                return page
-            
-            # Find the login form
+
+            if "/login" not in page.url:
+                print("✅ Already logged in (persistent session)")
+                return page, True
+
             login_form = page.query_selector('#loginForm')
             if not login_form:
-                print("⚠ Login form not found")
-                return page
-            
-            # Fill email field
+                print("⚠ Login form not found — assuming already authenticated")
+                return page, True
+
             email_input = page.query_selector('input[name="email"]')
-            if email_input:
-                email_input.fill(self.LOGIN_EMAIL)
-                print(f"  ✓ Filled email: {self.LOGIN_EMAIL}")
-            else:
-                print("  ✗ Email input not found")
-                return page
-            
-            # Fill password field
             password_input = page.query_selector('input[name="password"]')
-            if password_input:
-                password_input.fill(self.LOGIN_PASSWORD)
-                print("  ✓ Filled password")
-            else:
-                print("  ✗ Password input not found")
-                return page
-            
-            # Click submit button
-            submit_btn = page.query_selector('button[type="submit"][name="submit"]')
+            if not email_input or not password_input:
+                print("✗ Email or password input not found")
+                return page, False
+
+            email_input.fill(self.LOGIN_EMAIL)
+            print(f"  ✓ Filled email: {self.LOGIN_EMAIL}")
+            password_input.fill(self.LOGIN_PASSWORD)
+            print("  ✓ Filled password")
+
+            submit_btn = (
+                page.query_selector('button[type="submit"][name="submit"]') or
+                page.query_selector('#loginForm button[type="submit"]') or
+                page.query_selector('button.btn-info')
+            )
             if not submit_btn:
-                submit_btn = page.query_selector('#loginForm button[type="submit"]')
-            if not submit_btn:
-                submit_btn = page.query_selector('button.btn-info')
-            
-            if submit_btn:
-                print("  ✓ Found submit button, clicking...")
-                submit_btn.click()
-                
-                # Wait for navigation
-                page.wait_for_load_state("networkidle")
-                time.sleep(3)
-                
-                # Check if login was successful - URL changed from /login
-                current_url = page.url
-                print(f"  Current URL after login: {current_url}")
-                
-                # SUCCESS: URL no longer contains /login
-                if "/login" not in current_url:
-                    self._is_logged_in = True
-                    print("✅ Login successful! (URL changed from login page)")
-                    return page
-                
-                # Also check for user menu as backup indicator
-                user_menu = page.query_selector('.user-menu, .dropdown-toggle, [data-user], .user-profile')
-                if user_menu:
-                    self._is_logged_in = True
-                    print("✅ Login successful! (User menu found)")
-                    return page
-                
-                # Check for error message on login page
-                error_msg = page.query_selector('.form-error, .validation-error')
-                if error_msg:
-                    error_text = error_msg.text_content().strip()
-                    print(f"  ✗ Login error: {error_text}")
-                else:
-                    print("  ⚠ Login may have failed - still on login page without error")
-            
-            self._is_logged_in = False
-            return page
-            
+                print("✗ Submit button not found")
+                return page, False
+
+            submit_btn.click()
+            page.wait_for_load_state("networkidle")
+            time.sleep(3)
+
+            print(f"  URL after login: {page.url}")
+            if "/login" not in page.url:
+                print("✅ Login successful")
+                return page, True
+
+            error_el = page.query_selector('.form-error, .validation-error')
+            error_msg = error_el.text_content().strip() if error_el else "Unknown (still on login page)"
+            print(f"  ✗ Login failed: {error_msg}")
+            return page, False
+
         except Exception as e:
-            print(f"⚠ Login error: {e}")
-            import traceback
-            traceback.print_exc()
-            self._is_logged_in = False
-            return page
-    
-    def _extract_download_info(self, page: Page) -> Tuple[str, str]:
-        """Extract download URL and file size from book page"""
-        download_url = 'N/A'
-        file_size = 'N/A'
-        
-        try:
-            download_btn = page.query_selector('a.addDownloadedBook')
-            if not download_btn:
-                download_btn = page.query_selector('a[class*="addDownloadedBook"]')
-            if not download_btn:
-                download_btn = page.query_selector('a.btn-default')
-            
-            if download_btn:
-                href = download_btn.get_attribute('href')
-                if href:
-                    download_url = f"{self.BASE_URL}{href}" if not href.startswith('http') else href
-                    print(f"    Found download URL: {download_url}")
-                
-                full_text = download_btn.text_content().strip()
-                size_match = re.search(r'(\d+\.?\d*\s*(MB|KB|GB|B))', full_text, re.IGNORECASE)
-                if size_match:
-                    file_size = size_match.group(1)
-                    print(f"    File size: {file_size}")
-                
-                extension_span = download_btn.query_selector('.book-property__extension')
-                if extension_span:
-                    extension = extension_span.text_content().strip()
-                    print(f"    File extension: {extension}")
-            else:
-                print("    ⚠ Download button not found on book page")
-            
-        except Exception as e:
-            print(f"    Error extracting download info: {e}")
-        
-        return download_url, file_size
-    
-    def _download_file(self, page: Page) -> Optional[bytes]:
-        """Download a single file from the current book page and return its content"""
-        try:
-            print("    Looking for download button...")
-            
-            download_btn = page.query_selector('a.addDownloadedBook')
-            if not download_btn:
-                download_btn = page.query_selector('a[class*="addDownloadedBook"]')
-            if not download_btn:
-                download_btn = page.query_selector('a.btn-default')
-            if not download_btn:
-                download_btn = page.query_selector('a[href*="/dl/"]')
-            
-            if download_btn:
-                print("    ✓ Found download button")
-                
-                href = download_btn.get_attribute('href')
-                if href:
-                    full_url = f"{self.BASE_URL}{href}" if not href.startswith('http') else href
-                    print(f"    Download URL: {full_url}")
-                    
-                    try:
-                        with page.expect_download(timeout=30000) as download_info:
-                            page.goto(full_url, timeout=30000)
-                        
-                        download = download_info.value
-                        print(f"    Download started: {download.suggested_filename}")
-                        
-                        time.sleep(2)
-                        file_content = download.read_bytes()
-                        print(f"    ✓ Downloaded {len(file_content)} bytes")
-                        return file_content
-                        
-                    except Exception as e1:
-                        print(f"    Method 1 failed: {e1}")
-                        
-                        try:
-                            print("    Trying Method 2: Click button...")
-                            with page.expect_download(timeout=30000) as download_info:
-                                download_btn.click()
-                            
-                            download = download_info.value
-                            time.sleep(2)
-                            file_content = download.read_bytes()
-                            print(f"    ✓ Downloaded {len(file_content)} bytes via click")
-                            return file_content
-                            
-                        except Exception as e2:
-                            print(f"    Method 2 failed: {e2}")
-                            
-                            try:
-                                print("    Trying Method 3: Check temp file...")
-                                download = download_info.value
-                                temp_path = download.path()
-                                if temp_path and os.path.exists(temp_path):
-                                    time.sleep(1)
-                                    with open(temp_path, 'rb') as f:
-                                        file_content = f.read()
-                                    print(f"    ✓ Read {len(file_content)} bytes from temp file")
-                                    return file_content
-                            except Exception as e3:
-                                print(f"    Method 3 failed: {e3}")
-                
-                return None
-            else:
-                print("    ✗ Download button not found on page")
-                return None
-            
-        except Exception as e:
-            print(f"    Error downloading file: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-    
+            print(f"⚠ Login exception: {e}")
+            import traceback; traceback.print_exc()
+            return page, False
+
     def extract_books_from_table(self, page: Page) -> List[Book]:
-        """Extract book information from the current page's table"""
         books = []
-        book_rows = page.query_selector_all('table.table_book tbody tr')
-        
-        for row in book_rows:
+        rows = page.query_selector_all('table.table_book tbody tr')
+
+        for row in rows:
             try:
-                authors = row.query_selector_all('.authors a')
-                author_list = [author.text_content().strip() for author in authors]
-                
-                title_element = row.query_selector('td:nth-child(2) > a')
-                if title_element:
-                    title = ' '.join(title_element.text_content().strip().split())
-                    link = title_element.get_attribute('href')
-                    if link and not link.startswith('http'):
+                authors = [a.text_content().strip()
+                           for a in row.query_selector_all('.authors a')]
+
+                title_el = row.query_selector('td:nth-child(2) > a')
+                if title_el:
+                    title = ' '.join(title_el.text_content().strip().split())
+                    link = title_el.get_attribute('href') or 'N/A'
+                    if link != 'N/A' and not link.startswith('http'):
                         link = f"{self.BASE_URL}{link}"
                 else:
-                    title = 'N/A'
-                    link = 'N/A'
-                
-                publisher_element = row.query_selector('td:nth-child(3) a')
-                publisher = publisher_element.text_content().strip() if publisher_element else 'N/A'
-                
-                year_element = row.query_selector('td:nth-child(4)')
-                year = year_element.text_content().strip() if year_element else 'N/A'
-                
-                pages_element = row.query_selector('td:nth-child(5)')
-                pages = pages_element.text_content().strip() if pages_element else 'N/A'
-                
-                language_element = row.query_selector('td:nth-child(6)')
-                language = language_element.text_content().strip() if language_element else 'N/A'
-                
-                file_element = row.query_selector('td:nth-child(7) .book-property__extension')
-                file_info = file_element.text_content().strip() if file_element else 'N/A'
-                
-                book = Book(
-                    title=title,
-                    authors=author_list,
-                    publisher=publisher,
-                    year=year,
-                    pages=pages,
-                    language=language,
-                    file=file_info,
-                    link=link
-                )
-                books.append(book)
-                
+                    title, link = 'N/A', 'N/A'
+
+                def _cell_text(selector):
+                    el = row.query_selector(selector)
+                    return el.text_content().strip() if el else 'N/A'
+
+                publisher = _cell_text('td:nth-child(3) a')
+                year      = _cell_text('td:nth-child(4)')
+                pages     = _cell_text('td:nth-child(5)')
+                language  = _cell_text('td:nth-child(6)')
+                file_info = _cell_text('td:nth-child(7) .book-property__extension')
+
+                books.append(Book(
+                    title=title, authors=authors, publisher=publisher,
+                    year=year, pages=pages, language=language,
+                    file=file_info, link=link,
+                ))
             except Exception as e:
-                print(f"Error extracting book: {e}")
-                continue
-        
+                print(f"Error extracting row: {e}")
+
         return books
-    
+
     def get_total_pages(self, page: Page) -> int:
-        """Get total number of pages from pagination"""
         try:
-            content = page.content()
-            match = re.search(r'pagesTotal:\s*(\d+)', content)
+            match = re.search(r'pagesTotal:\s*(\d+)', page.content())
             if match:
                 return int(match.group(1))
-            
-            page_links = page.query_selector_all('.paginator a, .paginator span')
-            page_numbers = []
-            for link in page_links:
-                text = link.text_content().strip()
-                if text.isdigit():
-                    page_numbers.append(int(text))
-            if page_numbers:
-                return max(page_numbers)
-            
+            nums = [
+                int(el.text_content().strip())
+                for el in page.query_selector_all('.paginator a, .paginator span')
+                if el.text_content().strip().isdigit()
+            ]
+            return max(nums) if nums else 1
+        except Exception:
             return 1
-        except:
-            return 1
-    
+
     def get_total_books_count(self, page: Page) -> int:
-        """Get total number of books found"""
         try:
-            content = page.content()
-            match = re.search(r'booksTotal:\s*(\d+)', content)
+            match = re.search(r'booksTotal:\s*(\d+)', page.content())
             if match:
                 return int(match.group(1))
-            
-            # Try alternative selectors
-            result_count = page.query_selector('.totalCount, .search-result-count')
-            if result_count:
-                text = result_count.text_content()
-                numbers = re.findall(r'\d+', text)
-                if numbers:
-                    return int(numbers[0])
-            
+            el = page.query_selector('.totalCount, .search-result-count')
+            if el:
+                nums = re.findall(r'\d+', el.text_content())
+                return int(nums[0]) if nums else 0
             return 0
-        except:
+        except Exception:
             return 0
-    
-    def calculate_statistics(self, books: List[Book]) -> Dict:
-        """Calculate statistics from books data"""
-        if not books:
-            return {}
-        
-        stats = {
-            'total_books': len(books),
-            'languages': {},
-            'years': {},
-            'formats': {}
-        }
-        
-        for book in books:
-            lang = book.language
-            stats['languages'][lang] = stats['languages'].get(lang, 0) + 1
-        
-        for book in books:
-            year = book.year
-            if year != 'N/A' and year.isdigit():
-                stats['years'][year] = stats['years'].get(year, 0) + 1
-        
-        for book in books:
-            if book.file != 'N/A':
-                format_match = re.match(r'([a-zA-Z0-9]+)', book.file)
-                if format_match:
-                    fmt = format_match.group(1).upper()
-                    stats['formats'][fmt] = stats['formats'].get(fmt, 0) + 1
-        
-        return stats
-    
-    def search_books(self, query: str, page_num: int = 1, max_pages: Optional[int] = None, headless: bool = True) -> Tuple[List[Book], int, int]:
-        """Search Z-Library for books matching query
-        
-        Returns:
-            Tuple of (books_list, total_pages_available, total_books_count)
+
+    def extract_download_info(self, page: Page) -> Tuple[str, str]:
+        try:
+            btn = (
+                page.query_selector('a.addDownloadedBook') or
+                page.query_selector('a[class*="addDownloadedBook"]') or
+                page.query_selector('a[href*="/dl/"]')
+            )
+            if not btn:
+                return 'N/A', 'N/A'
+
+            href = btn.get_attribute('href') or ''
+            url = f"{self.BASE_URL}{href}" if href and not href.startswith('http') else href
+
+            text = btn.text_content().strip()
+            size_match = re.search(r'(\d+\.?\d*\s*(MB|KB|GB|B))', text, re.IGNORECASE)
+            size = size_match.group(1) if size_match else 'N/A'
+
+            ext_el = btn.query_selector('.book-property__extension')
+            ext = ext_el.text_content().strip() if ext_el else ''
+            if ext:
+                print(f"    File extension: {ext}")
+
+            print(f"    Found download URL: {url}  size: {size}")
+            return url, size
+
+        except Exception as e:
+            print(f"    Error extracting download info: {e}")
+            return 'N/A', 'N/A'
+
+    # Network-level error substrings that indicate a transient drop.
+    _RETRYABLE_ERRORS = (
+        "Timeout",                           # expect_download or goto timed out — server didn't respond
+        "ERR_CONNECTION_RESET",
+        "ERR_CONNECTION_CLOSED",
+        "ERR_TUNNEL_CONNECTION_FAILED",
+        "ERR_EMPTY_RESPONSE",
+        "net::ERR_",
+        "Target page, context or browser has been closed",
+        "Connection refused",
+    )
+    # Cloudflare error codes that mean "server temporarily unavailable, retry".
+    _RETRYABLE_CF_CODES = (b"522", b"523", b"524", b"525", b"526", b"530")
+
+    _MAX_RETRIES = 3
+    _RETRY_BACKOFF = (10, 20, 40)   # seconds to wait before attempt 2, 3, 4 — longer for CF timeouts
+
+    @staticmethod
+    def _is_cloudflare_error_page(data: bytes) -> Optional[str]:
         """
-        all_books = []
-        encoded_query = query.replace(' ', '%20')
-        total_pages_available = 1
-        total_books_count = 0
-        
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=headless)
-            context = browser.new_context(
-                viewport={'width': 1280, 'height': 800},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            )
-            
-            # LOGIN BEFORE SEARCHING
-            page = self._login(context)
-            
+        Return a human-readable reason string if `data` is a Cloudflare error
+        HTML page (e.g. 522 Connection timed out), otherwise return None.
+
+        Cloudflare error pages always contain the string 'cloudflare' and one
+        of the known 5xx error codes inside a <title> or .code-label element.
+        We check the first 2 KB only — the full page can be ~10 KB but the
+        telltale markers are always near the top.
+        """
+        head = data[:2048].lower()
+        if b"cloudflare" not in head:
+            return None
+        for code in ZLibraryScraperModel._RETRYABLE_CF_CODES:
+            if code in head:
+                return f"Cloudflare error {code.decode()} (server-side timeout)"
+        # Generic Cloudflare error page without a known code
+        if b"cf-error-details" in head or b"cf-wrapper" in head:
+            return "Cloudflare error page (unknown code)"
+        return None
+
+    def download_file(self, page: Page, context: BrowserContext, download_url: str) -> Optional[bytes]:
+        """
+        Download a file given its direct dl URL.
+        Returns raw bytes on success, None on failure.
+
+        Two classes of retryable failure are handled:
+
+        1. Network-level exceptions (ERR_CONNECTION_RESET, tunnel failures, …)
+           — caught in the outer except block via _RETRYABLE_ERRORS substrings.
+
+        2. Cloudflare 5xx HTML pages returned as the file body (error 522, 523…)
+           — the download "succeeds" from Playwright's perspective but the bytes
+           are an HTML error page, not the real file. Detected by
+           _is_cloudflare_error_page() after save_as completes.
+
+        WHY the inner try/except around goto():
+          Playwright raises "Page.goto: Download is starting" as an EXCEPTION
+          even when expect_download() is correctly registered and listening.
+          This is a known Playwright quirk — the download event still fires
+          and dl_info.value is populated correctly. We swallow that specific
+          error and continue; anything else is re-raised.
+        """
+        if not download_url or download_url == 'N/A':
+            return None
+
+        print(f"    Download URL: {download_url}")
+
+        def _save_download(download_obj) -> Optional[bytes]:
+            suffix = os.path.splitext(download_obj.suggested_filename)[1] or '.bin'
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp_path = tmp.name
             try:
-                # Construct URL for specific page
-                page_url = f"{self.BASE_URL}/s/{encoded_query}?view=table"
-                if page_num > 1:
-                    page_url += f"&page={page_num}"
-                
-                print(f"Accessing: {page_url}")
-                page.goto(page_url, timeout=60000)
-                page.wait_for_load_state("networkidle")
-                time.sleep(2)
-                
-                # Get total pages available and total books count
-                total_pages_available = self.get_total_pages(page)
-                total_books_count = self.get_total_books_count(page)
-                print(f"Total pages available: {total_pages_available}")
-                print(f"Total books found: {total_books_count}")
-                
-                # Extract books from current page
+                download_obj.save_as(tmp_path)
+                return _read_and_delete(tmp_path)
+            except Exception as e:
+                print(f"      save_as failed: {e}")
                 try:
-                    page.wait_for_selector('table.table_book tbody tr', timeout=10000)
-                except:
-                    print(f"No table found on page {page_num}")
-                    return [], total_pages_available, total_books_count
-                
-                books = self.extract_books_from_table(page)
-                print(f"Found {len(books)} books on page {page_num}")
-                all_books.extend(books)
-                
-            except Exception as e:
-                print(f"Error occurred: {e}")
-                import traceback
-                traceback.print_exc()
-            finally:
-                browser.close()
-        
-        self.books = all_books
-        self.statistics = self.calculate_statistics(all_books)
-        print(f"\nBooks found on page {page_num}: {len(all_books)}")
-        return all_books, total_pages_available, total_books_count
-    
-    def download_books(self, books: List[Dict], max_books: Optional[int] = None, headless: bool = True) -> bytes:
-        """Download actual book files and zip them together"""
-        downloaded_files = []
-        books_to_download = books[:max_books] if max_books else books
-        
-        print(f"\n📚 Starting download of {len(books_to_download)} books...")
-        
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=headless)
-            context = browser.new_context(
-                viewport={'width': 1280, 'height': 800},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                accept_downloads=True
-            )
-            
-            # LOGIN BEFORE DOWNLOADING
-            page = self._login(context)
-            
+                    pw_path = download_obj.path()
+                    if pw_path and os.path.exists(pw_path):
+                        return _read_and_delete(pw_path)
+                except Exception:
+                    pass
+                return None
+
+        def _is_retryable_exception(err: Exception) -> bool:
+            msg = str(err)
+            return any(tag in msg for tag in self._RETRYABLE_ERRORS)
+
+        for attempt in range(1, self._MAX_RETRIES + 1):
+            dl_page = None
             try:
-                for idx, book_data in enumerate(books_to_download, 1):
-                    print(f"\n[{idx}/{len(books_to_download)}] Processing: {book_data['title'][:50]}...")
-                    
-                    book_link = book_data.get('link')
-                    if not book_link or book_link == 'N/A':
-                        print(f"  ⚠ No link available, skipping")
-                        continue
-                    
+                dl_page = context.new_page()
+                with dl_page.expect_download(timeout=60000) as dl_info:
                     try:
-                        print(f"  Navigating to: {book_link}")
-                        page.goto(book_link, timeout=30000)
-                        page.wait_for_load_state("networkidle")
-                        time.sleep(2)
-                        
-                        self._extract_download_info(page)
-                        file_content = self._download_file(page)
-                        
-                        if file_content and len(file_content) > 0:
-                            safe_title = re.sub(r'[^\w\s-]', '', book_data['title'][:50])
-                            safe_title = re.sub(r'[-\s]+', '_', safe_title)
-                            if not safe_title:
-                                safe_title = f"book_{idx}"
-                            
-                            extension = book_data.get('file', 'txt').split(',')[0].strip().lower()
-                            if extension == 'N/A' or not extension:
-                                extension = 'txt'
-                            
-                            filename = f"{safe_title}.{extension}"
-                            
-                            downloaded_files.append({
-                                'filename': filename,
-                                'content': file_content,
-                                'size': len(file_content)
-                            })
-                            print(f"  ✅ Successfully added to ZIP: {filename} ({len(file_content)} bytes)")
-                        else:
-                            print(f"  ❌ No file content received")
-                    
-                    except Exception as e:
-                        print(f"  ❌ Error processing book: {e}")
-                        continue
-                    
-                    time.sleep(2)
-                
+                        dl_page.goto(download_url, wait_until="commit", timeout=60000)
+                    except Exception as goto_err:
+                        if "Download is starting" not in str(goto_err):
+                            raise
+
+                data = _save_download(dl_info.value)
+
+                if not data:
+                    # Empty file — not a transient error, give up immediately
+                    print("    ✗ save_as returned no data")
+                    return None
+
+                # Check whether we actually got a Cloudflare error HTML page
+                cf_reason = self._is_cloudflare_error_page(data)
+                if cf_reason:
+                    if attempt < self._MAX_RETRIES:
+                        delay = self._RETRY_BACKOFF[attempt - 1]
+                        print(f"    ⚠ Attempt {attempt}/{self._MAX_RETRIES} — {cf_reason}")
+                        print(f"      Retrying in {delay}s...")
+                        time.sleep(delay)
+                        continue   # next attempt
+                    else:
+                        print(f"    ✗ {cf_reason} — all {self._MAX_RETRIES} attempts exhausted")
+                        return None
+
+                attempt_tag = f" (attempt {attempt})" if attempt > 1 else ""
+                print(f"    ✓ Downloaded {len(data):,} bytes{attempt_tag}")
+                return data
+
             except Exception as e:
-                print(f"Error during download process: {e}")
-                import traceback
-                traceback.print_exc()
+                if _is_retryable_exception(e) and attempt < self._MAX_RETRIES:
+                    delay = self._RETRY_BACKOFF[attempt - 1]
+                    print(f"    ⚠ Attempt {attempt}/{self._MAX_RETRIES} failed (network): {e}")
+                    print(f"      Retrying in {delay}s...")
+                    time.sleep(delay)
+                else:
+                    print(f"    ✗ Download failed (attempt {attempt}/{self._MAX_RETRIES}): {e}")
+                    return None
             finally:
-                browser.close()
-        
-        print(f"\n📦 Creating ZIP archive with {len(downloaded_files)} files...")
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            for file_info in downloaded_files:
-                zip_file.writestr(file_info['filename'], file_info['content'])
-                print(f"  Added to ZIP: {file_info['filename']} ({file_info['size']} bytes)")
-        
-        zip_buffer.seek(0)
-        total_size = zip_buffer.getbuffer().nbytes
-        print(f"\n✅ Created ZIP archive: {total_size} bytes with {len(downloaded_files)} files")
-        
-        return zip_buffer.getvalue()
+                if dl_page:
+                    try:
+                        dl_page.close()
+                    except Exception:
+                        pass
+
+        return None
+
+
+def _read_and_delete(path: str) -> bytes:
+    with open(path, 'rb') as f:
+        data = f.read()
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+    return data
