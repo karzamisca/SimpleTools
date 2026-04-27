@@ -188,7 +188,7 @@ class ScraperController:
 
                 print(f"Accessing: {url}")
                 page.goto(url, timeout=60000)
-                page.wait_for_load_state("networkidle")
+                cls._model._wait_for_idle(page)
 
                 total_pages = cls._model.get_total_pages(page)
                 total_books = cls._model.get_total_books_count(page)
@@ -242,7 +242,7 @@ class ScraperController:
                     try:
                         print(f"  Navigating to: {book_link}")
                         page.goto(book_link, timeout=30000)
-                        page.wait_for_load_state("networkidle")
+                        cls._model._wait_for_idle(page)
 
                         download_url, file_size = cls._model.extract_download_info(page)
                         if download_url == 'N/A':

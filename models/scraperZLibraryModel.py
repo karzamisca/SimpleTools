@@ -58,12 +58,28 @@ class ZLibraryScraperModel:
             accept_downloads=True,
         )
 
+    @staticmethod
+    def _wait_for_idle(page: Page, timeout: int = 15000) -> None:
+        """
+        Wait for networkidle, but treat a timeout as a soft warning rather than
+        a fatal error. Z-Library pages often keep long-polling connections open
+        that prevent networkidle from ever firing; domcontentloaded is enough
+        for our scraping purposes.
+        """
+        try:
+            page.wait_for_load_state("networkidle", timeout=timeout)
+        except Exception:
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=5000)
+            except Exception:
+                pass  # Best-effort; carry on regardless
+
     def login(self, context: BrowserContext) -> Tuple[Page, bool]:
         page = context.new_page()
         try:
             print("🔐 Attempting to login...")
             page.goto(f"{self.BASE_URL}/login", timeout=30000)
-            page.wait_for_load_state("networkidle")
+            self._wait_for_idle(page)
             time.sleep(2)
 
             if "/login" not in page.url:
@@ -96,7 +112,7 @@ class ZLibraryScraperModel:
                 return page, False
 
             submit_btn.click()
-            page.wait_for_load_state("networkidle")
+            self._wait_for_idle(page)
             time.sleep(3)
 
             print(f"  URL after login: {page.url}")
