@@ -1,13 +1,13 @@
 # controllers/scraperZLibraryController.py
-import io
 import json
+import pathlib
 import queue
 import re
+import tempfile
 import threading
 import time
 import unicodedata
 import uuid
-import zipfile
 from datetime import datetime
 from typing import Dict, List, Optional
 from urllib.parse import quote
@@ -18,42 +18,78 @@ from playwright.sync_api import sync_playwright
 from models.scraperZLibraryModel import ZLibraryScraperModel
 
 # ---------------------------------------------------------------------------
-# Temp file store: token -> {filename, content, size, expires}
-# Each downloaded file is parked here for 5 minutes so the frontend can
-# fetch it with a simple GET.  Expired entries are evicted lazily.
+# Temp file store — filesystem-backed so ALL gunicorn workers can access it.
+#
+# WHY: Python dicts are per-process. With multiple gunicorn workers the SSE
+# stream (worker A) stores a token in memory, but the follow-up GET request
+# for that token may be routed to worker B whose dict is empty → 404.
+#
+# Using a shared temp directory on disk solves this without Redis or any
+# external dependency. Each token is two files in _STORE_DIR:
+#   <token>.bin   — raw file bytes
+#   <token>.meta  — JSON: {filename, size, expires}
 # ---------------------------------------------------------------------------
-_file_store: Dict[str, Dict] = {}
-_file_store_lock = threading.Lock()
+_STORE_DIR = pathlib.Path(tempfile.gettempdir()) / 'zlibrary_file_store'
+_STORE_DIR.mkdir(exist_ok=True)
+
+_TTL = 300   # seconds a token stays valid (5 min)
 
 
 def _store_file(filename: str, content: bytes) -> str:
-    """Save file bytes under a short-lived token; return the token."""
+    """Write file bytes + metadata to disk; return a one-time token."""
     token = uuid.uuid4().hex
-    with _file_store_lock:
-        _file_store[token] = {
-            'filename': filename,
-            'content': content,
-            'size': len(content),
-            'expires': time.time() + 300,   # 5 minutes
-        }
+    meta = json.dumps({
+        'filename': filename,
+        'size': len(content),
+        'expires': time.time() + _TTL,
+    })
+    (_STORE_DIR / f'{token}.meta').write_text(meta, encoding='utf-8')
+    (_STORE_DIR / f'{token}.bin').write_bytes(content)
     return token
 
 
 def _pop_file(token: str) -> Optional[Dict]:
-    """Retrieve and delete a stored file by token. Returns None if expired."""
-    with _file_store_lock:
-        entry = _file_store.pop(token, None)
-    if entry and time.time() > entry['expires']:
+    """
+    Read and delete a stored file by token.
+    Returns None if the token does not exist or has expired.
+    Token is one-time-use: files are removed whether expired or not.
+    """
+    meta_path = _STORE_DIR / f'{token}.meta'
+    bin_path  = _STORE_DIR / f'{token}.bin'
+
+    if not meta_path.exists() or not bin_path.exists():
         return None
-    return entry
+
+    try:
+        meta = json.loads(meta_path.read_text(encoding='utf-8'))
+        content = bin_path.read_bytes()
+    except Exception:
+        return None
+    finally:
+        meta_path.unlink(missing_ok=True)
+        bin_path.unlink(missing_ok=True)
+
+    if time.time() > meta['expires']:
+        return None
+
+    return {
+        'filename': meta['filename'],
+        'size':     meta['size'],
+        'content':  content,
+    }
 
 
 def _evict_expired():
-    """Remove any entries that have passed their TTL."""
+    """Delete any token files whose TTL has passed."""
     now = time.time()
-    with _file_store_lock:
-        for k in [k for k, v in _file_store.items() if now > v['expires']]:
-            del _file_store[k]
+    for meta_path in _STORE_DIR.glob('*.meta'):
+        try:
+            meta = json.loads(meta_path.read_text(encoding='utf-8'))
+            if now > meta['expires']:
+                meta_path.unlink(missing_ok=True)
+                (_STORE_DIR / meta_path.name.replace('.meta', '.bin')).unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def _content_disposition(filename: str) -> str:
@@ -183,7 +219,8 @@ class ScraperController:
         SSE endpoint. Opens one browser session, iterates through the requested
         books, and for each book:
           1. Downloads the file in the background thread.
-          2. Parks the bytes in _file_store under a one-time token.
+          2. Parks the bytes on disk under a one-time token (shared across all
+             gunicorn workers via the filesystem).
           3. Emits a 'ready' SSE event with the token.
           4. The frontend immediately triggers GET /api/download/file/<token>
              which streams the file to the user with its native MIME type.
@@ -194,6 +231,13 @@ class ScraperController:
                                "token": "<hex>", "filename": "book.pdf"}
           {"type": "error",    "index": i, "total": n, "title": "...", "message": "..."}
           {"type": "done",     "total": n, "success": k, "failed": m}
+
+        A heartbeat comment (': heartbeat') is sent every 5 seconds while the
+        worker is busy but has not yet produced an event. This keeps Cloudflare
+        Tunnel (and any other idle-connection-killing proxy) from closing the
+        stream before the backend finishes downloading a book.
+        SSE comments are valid per spec and are silently ignored by all
+        EventSource / fetch-stream clients.
         """
         data = request.get_json()
         if not data:
@@ -267,11 +311,34 @@ class ScraperController:
         thread.start()
 
         def _generate():
+            """
+            Yield SSE data frames from the worker queue.
+
+            Heartbeat strategy
+            ------------------
+            q.get(timeout=5) blocks for up to 5 seconds waiting for the next
+            event. If nothing arrives within that window we emit an SSE comment
+            line (': heartbeat\\n\\n'). SSE comments are defined in the spec
+            (lines beginning with ':') and are completely ignored by all
+            compliant clients, but they DO transmit bytes over the wire.
+            Transmitting bytes resets the idle timer on Cloudflare Tunnels,
+            nginx proxy_read_timeout, and similar infrastructure that would
+            otherwise kill a connection that appears silent.
+            """
             while True:
-                event = q.get()
+                try:
+                    event = q.get(timeout=5)
+                except queue.Empty:
+                    # No event yet — send a heartbeat to keep the tunnel alive
+                    yield ': heartbeat\n\n'
+                    continue
+
                 if event is None:
+                    # Sentinel: worker finished
                     break
+
                 yield f'data: {json.dumps(event, ensure_ascii=False)}\n\n'
+
             _evict_expired()
 
         return Response(
@@ -279,6 +346,7 @@ class ScraperController:
             mimetype='text/event-stream',
             headers={
                 'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
                 'X-Accel-Buffering': 'no',   # disable nginx buffering if present
             },
         )
